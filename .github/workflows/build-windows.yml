@@ -50,7 +50,13 @@ jobs:
 
       - name: Verify native MSVC compiler
         shell: pwsh
-        run: where.exe cl
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          where.exe cl
+          if ($LASTEXITCODE -ne 0) { throw "MSVC compiler was not found." }
+          where.exe dumpbin
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin was not found." }
 
       - name: Cache Rust build outputs
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
@@ -100,6 +106,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Main process build failed ($LASTEXITCODE)." }
           node scripts/prepare-platform-binaries.js
           if ($LASTEXITCODE -ne 0) { throw "Windows runtime binary preparation failed ($LASTEXITCODE)." }
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          $dependencyReport = Join-Path $dist "windows-native-pe-dependencies.txt"
+          Set-Content -Path $dependencyReport -Value "Windows x64 native executable and DLL imports" -Encoding utf8
+          $peFiles = Get-ChildItem "src/bin" -File | Where-Object { $_.Extension.ToLowerInvariant() -in @(".exe", ".dll") } | Sort-Object Name
+          foreach ($file in $peFiles) {
+            Add-Content -Path $dependencyReport -Value "`n=== $($file.Name) ==="
+            $imports = & dumpbin /dependents $file.FullName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin dependency inspection failed for $($file.Name) ($LASTEXITCODE)." }
+            Add-Content -Path $dependencyReport -Value $imports
+          }
+          if (-not ($peFiles.Name -contains "goose.exe")) { throw "Native PE audit did not include goose.exe." }
           pnpm run i18n:compile
           if ($LASTEXITCODE -ne 0) { throw "Desktop message compilation failed ($LASTEXITCODE)." }
           pnpm exec electron-forge package --platform=win32 --arch=x64
