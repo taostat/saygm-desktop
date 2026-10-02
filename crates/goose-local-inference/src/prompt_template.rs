@@ -6,6 +6,9 @@ use crate::paths::Paths;
 
 static CORE_PROMPTS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/prompts");
 
+pub(crate) const TINY_MODEL_SYSTEM_PROMPT_FALLBACK: &str =
+    "You are SayGM, an AI assistant. You can execute shell commands by starting lines with $.";
+
 pub fn render_string<T: Serialize>(
     template_str: &str,
     context: &T,
@@ -40,4 +43,20 @@ pub fn render_template<T: Serialize>(name: &str, context: &T) -> Result<String, 
     };
 
     render_string(&template_str, context)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bundled_tiny_model_prompt_and_fallback_use_saygm_identity() {
+        let file = CORE_PROMPTS_DIR
+            .get_file("tiny_model_system.md")
+            .expect("bundled tiny-model prompt");
+        let prompt = String::from_utf8_lossy(file.contents());
+
+        assert!(prompt.starts_with("You are SayGM, an autonomous AI assistant."));
+        assert!(TINY_MODEL_SYSTEM_PROMPT_FALLBACK.starts_with("You are SayGM,"));
+    }
 }

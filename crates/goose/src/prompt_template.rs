@@ -9,7 +9,7 @@ static CORE_PROMPTS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/prompts");
 static TEMPLATE_REGISTRY: &[(&str, &str)] = &[
     (
         "system.md",
-        "Main system prompt that defines goose's personality and behavior",
+        "Main system prompt that defines SayGM's personality and behavior",
     ),
     (
         "compaction.md",
@@ -25,11 +25,11 @@ static TEMPLATE_REGISTRY: &[(&str, &str)] = &[
     ),
     (
         "apps_create.md",
-        "Prompt for generating new Goose apps based on the user instructions",
+        "Prompt for generating new SayGM apps based on the user instructions",
     ),
     (
         "apps_iterate.md",
-        "Prompt for updating existing Goose apps based on feedback",
+        "Prompt for updating existing SayGM apps based on feedback",
     ),
     (
         "permission_judge.md",
@@ -241,6 +241,7 @@ mod tests {
 
         let template = template.unwrap();
         assert_eq!(template.name, "system.md");
+        assert!(template.description.contains("SayGM"));
         assert!(!template.description.is_empty());
         assert!(!template.default_content.is_empty());
         assert!(!template.is_customized);
@@ -271,6 +272,28 @@ mod tests {
                 !template.default_content.is_empty(),
                 "Each template should have content"
             );
+        }
+    }
+
+    #[test]
+    fn bundled_agent_prompts_use_saygm_identity() {
+        for (name, expected_identity) in [
+            (
+                "system.md",
+                "You are SayGM, a general-purpose AI assistant.",
+            ),
+            (
+                "subagent_system.md",
+                "You are a specialized subagent working with SayGM",
+            ),
+            (
+                "tiny_model_system.md",
+                "You are SayGM, an autonomous AI assistant.",
+            ),
+        ] {
+            let prompt = builtin_content(name).expect("bundled prompt");
+            assert!(prompt.starts_with(expected_identity), "{name}");
+            assert!(!prompt.contains("created by AAIF"), "{name}");
         }
     }
 }
