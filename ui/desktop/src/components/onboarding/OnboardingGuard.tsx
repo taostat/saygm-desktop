@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RotateCw } from 'lucide-react';
-import { acpReadConfig, acpUpsertConfig } from '../../acp/config';
 import { acpReadDefaults } from '../../acp/providers';
+import { useConfig } from '../ConfigContext';
 import { SayGMLockup } from '../SayGMMark';
 import WelcomeSetup from './WelcomeSetup';
 
@@ -10,13 +10,6 @@ interface OnboardingGuardProps {
 }
 
 type SetupStatus = 'checking' | 'error' | 'setup' | 'ready';
-
-async function ensureSafeToolApprovalDefault() {
-  const currentMode = await acpReadConfig('GOOSE_MODE', false);
-  if (currentMode == null || currentMode === '') {
-    await acpUpsertConfig('GOOSE_MODE', 'approve', false);
-  }
-}
 
 async function isSayGMConfigured(): Promise<boolean> {
   const [account, defaults] = await Promise.all([
@@ -71,6 +64,7 @@ function StartupError({ onRetry }: { onRetry: () => void }) {
 }
 
 export default function OnboardingGuard({ children }: OnboardingGuardProps) {
+  const { read, upsert } = useConfig();
   const [status, setStatus] = useState<SetupStatus>('checking');
   const statusRef = useRef<SetupStatus>('checking');
   const readinessCheckId = useRef(0);
@@ -79,6 +73,13 @@ export default function OnboardingGuard({ children }: OnboardingGuardProps) {
     statusRef.current = next;
     setStatus(next);
   }, []);
+
+  const ensureSafeToolApprovalDefault = useCallback(async () => {
+    const currentMode = await read('GOOSE_MODE', false, { throwOnError: true });
+    if (currentMode == null || currentMode === '') {
+      await upsert('GOOSE_MODE', 'approve', false);
+    }
+  }, [read, upsert]);
 
   const checkSetup = useCallback(
     async (showChecking = true) => {
@@ -94,7 +95,7 @@ export default function OnboardingGuard({ children }: OnboardingGuardProps) {
         if (checkId === readinessCheckId.current) updateStatus('error');
       }
     },
-    [updateStatus]
+    [ensureSafeToolApprovalDefault, updateStatus]
   );
 
   const completeSetup = useCallback(async () => {

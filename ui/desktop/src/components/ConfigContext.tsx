@@ -49,14 +49,19 @@ export const ConfigProvider: React.FC<ConfigProviderProps> = ({ children }) => {
   const [providersList, setProvidersList] = useState<ProviderDetails[]>([]);
   const [extensionsList, setExtensionsList] = useState<FixedExtensionEntry[]>([]);
   const [extensionWarnings, setExtensionWarnings] = useState<string[]>([]);
+  // Prevent an older snapshot from overwriting a newer reload, such as the one after a write.
+  const configReadVersion = React.useRef(0);
 
   // Ref to access providersList in getProviders without recreating the callback
   const providersListRef = React.useRef<ProviderDetails[]>(providersList);
   providersListRef.current = providersList;
 
   const reloadConfig = useCallback(async () => {
+    const readVersion = ++configReadVersion.current;
     const config = await acpReadAllConfig();
-    setConfig(config);
+    if (readVersion === configReadVersion.current) {
+      setConfig(config);
+    }
   }, []);
 
   const upsert = useCallback(
@@ -155,8 +160,7 @@ export const ConfigProvider: React.FC<ConfigProviderProps> = ({ children }) => {
     // Load all configuration data and providers on mount
     (async () => {
       // Load config
-      const configResponse = await acpReadAllConfig();
-      setConfig(configResponse);
+      await reloadConfig();
 
       // Load providers
       try {
@@ -201,7 +205,7 @@ export const ConfigProvider: React.FC<ConfigProviderProps> = ({ children }) => {
         console.error('Failed to load extensions:', error);
       }
     })();
-  }, []);
+  }, [reloadConfig]);
 
   const contextValue = useMemo(() => {
     return {
