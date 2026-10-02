@@ -114,7 +114,7 @@ jobs:
             added_runtime_files = $runtimeEvidence
             operating_system = (Get-CimInstance Win32_OperatingSystem).Caption
           } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reports 'provenance.json')
-          if (($runtimeEvidence | Where-Object { $_.signature_status -ne 'Valid' -or $_.signer -ne 'Microsoft Corporation' }).Count -gt 0) {
+          if (($runtimeEvidence | Where-Object { $_.signature_status -ne 'Valid' -or $_.certificate_subject -notmatch '(?i)(^|,\s*)O=Microsoft Corporation(,|$)' }).Count -gt 0) {
             $runtimeEvidence | ConvertTo-Json -Depth 4 | Write-Output
             throw 'Diagnostic runtime must have a valid Microsoft signature; exact certificate evidence is recorded.'
           }
