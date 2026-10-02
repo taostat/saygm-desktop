@@ -42,7 +42,7 @@ for (const [name, bytes] of [['Electron app', appBytes], ['embedded backend', ba
   }
 }
 const archivePath = path.join(path.dirname(path.dirname(backendPath)), 'app.asar');
-const bundledMain = asar.extractFile(archivePath, '.vite/build/main.js').toString();
+const bundledMain = asar.extractFile(archivePath, path.join('.vite', 'build', 'main.js')).toString();
 assert(bundledMain.includes('https://account.saygm.com/v1'), 'Installed account service must target production');
 assert(!bundledMain.includes('test-account.saygm.com'), 'Testnet account transport must not be packaged');
 assert(backendBytes.includes(Buffer.from('https://api.saygm.com')), 'Installed SayGM provider must contain its production gateway');
