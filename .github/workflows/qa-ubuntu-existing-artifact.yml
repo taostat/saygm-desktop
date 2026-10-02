@@ -1,0 +1,99 @@
+name: QA existing Ubuntu RC5 artifact
+
+on:
+  push:
+    branches: [codex/qa-ubuntu-rc5-native]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  native-artifact-smoke:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install runtime and isolated smoke dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends \
+            libasound2 libatk-bridge2.0-0 libdrm2 libgbm1 libgtk-3-0 \
+            libnss3 libnotify4 libxss1 libxtst6 libsecret-1-0 \
+            dbus-x11 gnome-keyring libsecret-tools xvfb xauth unzip
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.10.0
+
+      - name: Install locked QA dependencies
+        run: |
+          npm install --global pnpm@10.30.3
+          pnpm --dir ui install --frozen-lockfile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: '11232298663'
+          run-id: '37013434138'
+          github-token: ${{ github.token }}
+          path: downloaded-artifact
+
+      - name: Verify immutable compiled artifact and extract portable app
+        run: |
+          set -euo pipefail
+          mkdir -p qa-reports
+          printf '%s\n' '216fabf0816b859eb2a3810ef9651ef864d887ec9f95d64c8d4dcc25e370d825  downloaded-artifact/SayGM-0.1.0-rc.5-linux-x64.zip' | sha256sum --check
+          unzip -q downloaded-artifact/SayGM-0.1.0-rc.5-linux-x64.zip -d "$RUNNER_TEMP/qa-portable"
+          app_dir="$RUNNER_TEMP/qa-portable/SayGM-linux-x64"
+          printf '%s  %s\n' '5ddc46108967a08a0fae75d8b12cb5faa2a2bf22cee6ef0a2af8199bd88e7eb2' "$app_dir/SayGM" | sha256sum --check
+          printf '%s  %s\n' '2b012eded91969b7708d51bcd22cafb4049e1272419317cf001adb844dc0bd48' "$app_dir/resources/bin/goose" | sha256sum --check
+          printf '%s  %s\n' '73c34f79ab2f49cbff42a82068b18f332de7fa5480df93755c053100ee190603' "$app_dir/resources/app.asar" | sha256sum --check
+          ldd "$app_dir/SayGM" > qa-reports/app-ldd.txt
+          ldd "$app_dir/resources/bin/goose" > qa-reports/backend-ldd.txt
+          if grep -F 'not found' qa-reports/app-ldd.txt qa-reports/backend-ldd.txt; then
+            echo 'Portable app has unresolved runtime libraries.' >&2
+            exit 1
+          fi
+          cat > qa-reports/provenance.json <<'JSON'
+          {
+            "source_run": 37013434138,
+            "source_commit": "dd525c6fc986faff8209ed6c60b895379ec389ee",
+            "source_artifact": 11232298663,
+            "zip_sha256": "216fabf0816b859eb2a3810ef9651ef864d887ec9f95d64c8d4dcc25e370d825",
+            "boundary": "Portable app from a successful native compile/package followed by a Debian metadata failure. The pre-repack deb is neither installed nor approved. No account login, customer credential, inference, or payment."
+          }
+          JSON
+
+      - name: Exercise real app, backend, Secret Service and basic_text guard
+        run: |
+          set -euo pipefail
+          export QA_KEYRING_PASSWORD="saygm-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          dbus-run-session -- bash -euo pipefail -s <<'BASH'
+            export XDG_RUNTIME_DIR="$RUNNER_TEMP/saygm-qa-runtime"
+            export XDG_DATA_HOME="$RUNNER_TEMP/saygm-qa-data"
+            export XDG_CONFIG_HOME="$RUNNER_TEMP/saygm-qa-config"
+            mkdir -p "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"
+            chmod 700 "$XDG_RUNTIME_DIR"
+            trap 'rm -rf "$XDG_RUNTIME_DIR" "$XDG_DATA_HOME" "$XDG_CONFIG_HOME"' EXIT
+            printf '%s' "$QA_KEYRING_PASSWORD" | gnome-keyring-daemon --unlock --components=secrets >/dev/null
+            app_dir="$RUNNER_TEMP/qa-portable/SayGM-linux-x64"
+            result=0
+            xvfb-run -a node scripts/qa-native-desktop.mjs \
+              --app "$app_dir/SayGM" --backend "$app_dir/resources/bin/goose" \
+              --expect-storage available --password-store gnome-libsecret \
+              --report "$GITHUB_WORKSPACE/qa-reports/qa-native-secret-service.json" || result=1
+            xvfb-run -a node scripts/qa-native-desktop.mjs \
+              --app "$app_dir/SayGM" --backend "$app_dir/resources/bin/goose" \
+              --expect-storage unavailable --password-store basic \
+              --report "$GITHUB_WORKSPACE/qa-reports/qa-native-basic-storage.json" || result=1
+            exit "$result"
+          BASH
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: ubuntu-existing-artifact-native-qa-${{ github.run_id }}
+          path: qa-reports/
+          if-no-files-found: error
+          retention-days: 30
