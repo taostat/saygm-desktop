@@ -20,14 +20,32 @@ for (let index = 2; index < process.argv.length; index += 2) {
 for (const required of ['app', 'backend', 'expect-storage', 'report']) assert(options[required], `Missing --${required}`);
 assert(['available', 'unavailable'].includes(options['expect-storage']));
 assert(['linux', 'win32'].includes(process.platform), 'This test must run on the native target OS');
-assert.equal(process.arch, 'x64', 'This RC5 smoke targets native x64 artifacts');
+const expectedArchitecture = options['expect-arch'] ?? 'x64';
+assert(['x64', 'arm64'].includes(expectedArchitecture), 'Expected architecture must be x64 or arm64');
+assert(process.platform === 'linux' || expectedArchitecture === 'x64', 'Windows RC5 supports x64 only');
+assert.equal(process.arch, expectedArchitecture, 'QA must run natively on the requested artifact architecture');
 const appPath = await fs.realpath(path.resolve(options.app));
 const backendPath = await fs.realpath(path.resolve(options.backend));
+const appBytes = await fs.readFile(appPath);
+const backendBytes = await fs.readFile(backendPath);
+for (const [name, bytes] of [['Electron app', appBytes], ['embedded backend', backendBytes]]) {
+  if (process.platform === 'linux') {
+    assert.equal(bytes.subarray(0, 4).toString('hex'), '7f454c46', `${name} must be ELF`);
+    assert.equal(bytes[4], 2, `${name} must be ELF64`);
+    assert.equal(bytes[5], 1, `${name} must be little-endian`);
+    assert.equal(bytes.readUInt16LE(18), expectedArchitecture === 'arm64' ? 183 : 62, `${name} ELF architecture must match the native runner`);
+  } else {
+    assert.equal(bytes.subarray(0, 2).toString('ascii'), 'MZ', `${name} must be PE`);
+    const peOffset = bytes.readUInt32LE(60);
+    assert.equal(bytes.subarray(peOffset, peOffset + 4).toString('hex'), '50450000', `${name} must have a PE header`);
+    assert.equal(bytes.readUInt16LE(peOffset + 4), 0x8664, `${name} must be x64 PE`);
+  }
+}
 const archivePath = path.join(path.dirname(path.dirname(backendPath)), 'app.asar');
 const bundledMain = asar.extractFile(archivePath, '.vite/build/main.js').toString();
 assert(bundledMain.includes('https://account.saygm.com/v1'), 'Installed account service must target production');
 assert(!bundledMain.includes('test-account.saygm.com'), 'Testnet account transport must not be packaged');
-assert((await fs.readFile(backendPath)).includes(Buffer.from('https://api.saygm.com')), 'Installed SayGM provider must contain its production gateway');
+assert(backendBytes.includes(Buffer.from('https://api.saygm.com')), 'Installed SayGM provider must contain its production gateway');
 const reportPath = path.resolve(options.report);
 await fs.mkdir(path.dirname(reportPath), { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-native-qa-'));
@@ -55,10 +73,12 @@ const report = {
   started_at: new Date().toISOString(),
   platform: process.platform,
   architecture: process.arch,
+  expected_architecture: expectedArchitecture,
+  app_and_backend_binary_architectures_verified: true,
   boundary: 'Actual packaged app and embedded backend; isolated app-data and disposable non-authoritative fixture only. No account login, customer credential, inference, or payment. CDP is bound to loopback for this test only. The invoking workflow records whether the app was installed or extracted from a portable archive.',
   expected_storage: options['expect-storage'],
-  app_sha256: createHash('sha256').update(await fs.readFile(appPath)).digest('hex'),
-  backend_sha256: createHash('sha256').update(await fs.readFile(backendPath)).digest('hex'),
+  app_sha256: createHash('sha256').update(appBytes).digest('hex'),
+  backend_sha256: createHash('sha256').update(backendBytes).digest('hex'),
   asar_sha256: createHash('sha256').update(await fs.readFile(archivePath)).digest('hex'),
   production_endpoint_markers_verified: true,
   events,
@@ -134,7 +154,7 @@ async function start() {
     autoDownloadDisabled: await window.electron.getAutoDownloadDisabled(),
   }));
   assert.equal(details.platform, process.platform);
-  assert.equal(details.arch, 'x64');
+  assert.equal(details.arch, expectedArchitecture);
   assert.equal(details.version, '0.1.0-rc.5');
   const runtimeRoot = path.resolve(details.config.GOOSE_PATH_ROOT);
   const temporaryRoot = path.join(temporaryUserData, 'agent');
