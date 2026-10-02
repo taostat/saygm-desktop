@@ -63,12 +63,18 @@ jobs:
           $runtimeCandidates = @()
           foreach ($root in $runtimeRoots) {
             if (-not (Test-Path $root)) { continue }
-            $runtimeDirectories = @(Get-ChildItem $root -Directory -Recurse |
-              Where-Object { $_.Name -like 'Microsoft.VC*.CRT' -and $_.Parent.Name -eq 'x64' })
-            foreach ($directory in $runtimeDirectories) {
-              if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -ne 0) { continue }
-              $version = [Version](Get-Item (Join-Path $directory.FullName 'vcruntime140.dll')).VersionInfo.FileVersion
-              $runtimeCandidates += [pscustomobject]@{ Directory = $directory.FullName; Version = $version }
+            $versionRoots = if (Test-Path (Join-Path $root 'x64')) { @($root) } else {
+              @(Get-ChildItem $root -Directory | Where-Object { $_.Name -match '^\d+\.\d+\.\d+(\.\d+)?$' } | ForEach-Object FullName)
+            }
+            foreach ($versionRoot in $versionRoots) {
+              $desktopRoot = Join-Path $versionRoot 'x64'
+              if (-not (Test-Path $desktopRoot)) { continue }
+              $runtimeDirectories = @(Get-ChildItem $desktopRoot -Directory | Where-Object { $_.Name -like 'Microsoft.VC*.CRT' })
+              foreach ($directory in $runtimeDirectories) {
+                if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -ne 0) { continue }
+                $version = [Version](Get-Item (Join-Path $directory.FullName 'vcruntime140.dll')).VersionInfo.FileVersion
+                $runtimeCandidates += [pscustomobject]@{ Directory = $directory.FullName; Version = $version }
+              }
             }
             if ($runtimeCandidates.Count -gt 0) { break }
           }
