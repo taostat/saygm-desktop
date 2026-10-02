@@ -82,13 +82,17 @@ jobs:
             if (Test-Path $destination) { throw 'First diagnostic artifact unexpectedly already has the runtime fix.' }
             Copy-Item $source $destination
             $signature = Get-AuthenticodeSignature $destination
-            $signer = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
-            if ($signature.Status -ne 'Valid' -or $signer -ne 'Microsoft Corporation') { throw 'Diagnostic runtime must have a valid Microsoft signature.' }
+            $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { '' }
             $runtimeEvidence += @{
               name = $name
               sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash.ToLowerInvariant()
               file_version = (Get-Item $destination).VersionInfo.FileVersion
               signer = $signer
+              signature_status = $signature.Status.ToString()
+              signature_status_message = $signature.StatusMessage
+              certificate_subject = $signature.SignerCertificate.Subject
+              certificate_issuer = $signature.SignerCertificate.Issuer
+              certificate_thumbprint = $signature.SignerCertificate.Thumbprint
             }
             Add-Content (Join-Path $reports 'runtime-dependencies.txt') "=== $name ==="
             dumpbin /dependents $destination | Add-Content (Join-Path $reports 'runtime-dependencies.txt')
@@ -104,6 +108,10 @@ jobs:
             added_runtime_files = $runtimeEvidence
             operating_system = (Get-CimInstance Win32_OperatingSystem).Caption
           } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reports 'provenance.json')
+          if (($runtimeEvidence | Where-Object { $_.signature_status -ne 'Valid' -or $_.signer -ne 'Microsoft Corporation' }).Count -gt 0) {
+            $runtimeEvidence | ConvertTo-Json -Depth 4 | Write-Output
+            throw 'Diagnostic runtime must have a valid Microsoft signature; exact certificate evidence is recorded.'
+          }
           $protocolKey = 'HKCU:\Software\Classes\saygm'
           if (Test-Path $protocolKey) { throw 'Disposable runner unexpectedly has a preexisting SayGM protocol handler.' }
           try {
