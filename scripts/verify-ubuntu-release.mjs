@@ -101,6 +101,7 @@ try {
   const dependencies = output(['dpkg-deb', '--field', args.deb, 'Depends']);
   const dependencyNames = new Set(dependencies.split(',').map((item) => item.trim().match(/^([a-z0-9][a-z0-9+.-]*)/)?.[1]).filter(Boolean));
   assert(dependencyNames.has('libsecret-1-0'), 'Debian package must declare Secret Service runtime support');
+  assert(dependencyNames.has('libasound2'), 'Debian package must declare Electron audio runtime support');
   const packageOwner = async (library) => {
     let resolved;
     try { resolved = await fs.realpath(library); } catch { /* Try the original path below. */ }

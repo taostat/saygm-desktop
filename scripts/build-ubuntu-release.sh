@@ -121,7 +121,9 @@ if [[ "$(sha256sum "$package_goose" | cut -d ' ' -f 1)" != "$source_hash" ]]; th
   exit 1
 fi
 
-runtime_packages=(libsecret-1-0)
+# Electron loads libasound at runtime; build runners have its -dev package
+# already installed, so declare the runtime package explicitly in the DEB.
+runtime_packages=(libsecret-1-0 libasound2)
 while IFS= read -r library; do
   [[ -n "$library" ]] || continue
   owner=""
