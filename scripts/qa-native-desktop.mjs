@@ -173,7 +173,17 @@ async function start() {
   const startup = JSON.parse(await fs.readFile(path.join(startupDirectory, startupFiles.at(-1)), 'utf8'));
   const actualBackend = await fs.realpath(startup.binaryPath);
   assert.equal(process.platform === 'win32' ? actualBackend.toLowerCase() : actualBackend, process.platform === 'win32' ? backendPath.toLowerCase() : backendPath, 'App must launch its own installed backend');
-  assert(startup.pid > 0 && startup.healthCheckSucceeded, 'Installed backend must pass its real startup health check');
+  assert(Number.isInteger(startup.pid) && startup.pid > 0 && startup.healthCheckSucceeded, 'Installed backend must pass its real startup health check');
+  if (process.platform === 'win32') {
+    const moduleJson = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference = 'Stop'; ConvertTo-Json -Compress -InputObject @((Get-Process -Id ${startup.pid}).Modules | Where-Object { $_.ModuleName -match '^(msvcp|msvcr|vcruntime|concrt)[0-9].*\\.dll$' } | Select-Object ModuleName,FileName)`], { encoding: 'utf8' });
+    const modules = JSON.parse(moduleJson);
+    assert(Array.isArray(modules), 'Windows must return the backend runtime module list');
+    const requiredRuntime = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+    report.windows_vc_runtime_modules = modules;
+    report.windows_vc_runtime_loaded_from_bundle = requiredRuntime.every((name) => modules.some((module) => module.ModuleName.toLowerCase() === name))
+      && modules.every((module) => path.dirname(module.FileName).toLowerCase() === path.dirname(backendPath).toLowerCase());
+  }
   const endpoint = new URL(details.acpUrl);
   assert.equal(endpoint.protocol, 'wss:');
   assert.equal(endpoint.hostname, '127.0.0.1');
@@ -272,12 +282,11 @@ try {
     fixtureWritten = true;
     await rpc('_goose/unstable/providers/config/save', { providerId: 'saygm', fields: [{ key: 'SAYGM_API_KEY', value: fixture }] });
     assert.equal(await readFixtureState(), true);
+    await stop();
     await assertNoPlaintextFixture();
     await note('Bundled backend stored a disposable non-authoritative fixture in the native secret store');
-    await stop();
     await start();
     assert.equal(await readFixtureState(), true);
-    await assertNoPlaintextFixture();
     const deletion = await rpc('_goose/unstable/providers/secrets/delete-if-sha256-matches', { providerId: 'saygm', key: 'SAYGM_API_KEY', expectedSha256: fixtureHash });
     assert.equal(deletion.deleted, true, 'Restarted backend must decrypt and match the exact fixture before deletion');
     fixtureDeleted = true;
@@ -301,14 +310,20 @@ try {
   }
   await note('Fresh-profile onboarding rendered with the expected sign-in availability');
   await active.page.screenshot({ path: reportPath.replace(/\.json$/, '') + '.png' });
+  await stop();
+  await assertNoPlaintextFixture();
+  if (process.platform === 'win32') {
+    assert.equal(report.windows_vc_runtime_loaded_from_bundle, true, 'Backend Visual C++ runtime DLLs must load from its own bundle, not the build runner');
+  }
   report.result = 'passed';
 } catch (error) {
   report.result = 'failed';
   report.error = String(error.message).replaceAll(fixture, '[fixture]');
   process.exitCode = 1;
 } finally {
-  if (fixtureWritten && !fixtureDeleted && active?.page) {
+  if (fixtureWritten && !fixtureDeleted) {
     try {
+      if (!active?.page) await start();
       const cleanup = await rpc('_goose/unstable/providers/secrets/delete-if-sha256-matches', { providerId: 'saygm', key: 'SAYGM_API_KEY', expectedSha256: fixtureHash });
       fixtureDeleted = cleanup.deleted === true;
     } catch { /* Report incomplete fixture cleanup explicitly. */ }
