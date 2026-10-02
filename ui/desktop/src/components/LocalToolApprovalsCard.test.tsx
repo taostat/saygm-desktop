@@ -27,6 +27,27 @@ describe('LocalToolApprovalsCard', () => {
     configState.config = {};
     configState.upsert.mockReset();
     configState.upsert.mockResolvedValue(undefined);
+    Object.assign(window.electron, { platform: 'darwin' });
+  });
+
+  it.each([
+    ['darwin', 'This Mac', 'Decide when tools on this Mac can act. Set here, stored here.'],
+    [
+      'linux',
+      'This computer',
+      'Decide when tools on this computer can act. Set here, stored here.',
+    ],
+    [
+      'win32',
+      'This computer',
+      'Decide when tools on this computer can act. Set here, stored here.',
+    ],
+  ])('uses accurate local-device wording on %s', (platform, scope, description) => {
+    Object.assign(window.electron, { platform });
+    renderCard();
+
+    expect(screen.getByText(scope)).toBeInTheDocument();
+    expect(screen.getByText(description)).toBeInTheDocument();
   });
 
   it('marks the stored approval mode as selected', () => {

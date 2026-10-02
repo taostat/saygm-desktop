@@ -7,6 +7,7 @@ import type {
   GmDeviceLoginInstructions,
 } from '../../types/gmAccount';
 import { cn } from '../../utils';
+import { getLocalDeviceName } from '../../utils/localDeviceName';
 
 type Action = 'idle' | 'starting' | 'waiting' | 'key' | 'setup' | 'balance' | 'logout';
 type BalanceRequest = {
@@ -32,6 +33,7 @@ const ALERT_CLASS =
   'rounded-[10px] border border-[rgba(255,80,63,0.32)] bg-[rgba(255,80,63,0.08)] px-3.5 py-2.5 text-[13px] text-text-danger';
 
 export default function GMAccount({ mode = 'full', onConnected }: GmAccountComponentProps) {
+  const localDeviceName = getLocalDeviceName(window.electron.platform);
   const [status, setStatus] = useState<GmAccountStatus | null>(null);
   const [balance, setBalance] = useState<GmAccountBalance | null>(null);
   const [balanceError, setBalanceError] = useState<string | null>(null);
@@ -563,7 +565,7 @@ export default function GMAccount({ mode = 'full', onConnected }: GmAccountCompo
           <p className="text-[15px] text-text-secondary">
             {status?.connected
               ? 'Check your credits and manage the SayGM connection for this desktop.'
-              : 'Approve sign-in in your browser. Your session is kept in this Mac’s secure storage.'}
+              : `Approve sign-in in your browser. Your session is kept in this ${localDeviceName}’s secure storage.`}
           </p>
         </div>
       )}
@@ -622,8 +624,8 @@ export default function GMAccount({ mode = 'full', onConnected }: GmAccountCompo
               </div>
               <p className="text-[13px] text-text-secondary">
                 {status.mode === 'session'
-                  ? 'Your session is kept in this Mac’s secure storage.'
-                  : 'Your key is kept in this Mac’s secure storage.'}
+                  ? `Your session is kept in this ${localDeviceName}’s secure storage.`
+                  : `Your key is kept in this ${localDeviceName}’s secure storage.`}
               </p>
               <div className="mt-auto">
                 <button

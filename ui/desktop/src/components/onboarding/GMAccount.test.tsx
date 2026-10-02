@@ -62,6 +62,17 @@ describe('GMAccount', () => {
     account.openTopup.mockResolvedValue(undefined);
     account.cancelDeviceLogin.mockResolvedValue(undefined);
     Object.assign(window.electron, { gmAccount: account });
+    Object.assign(window.electron, { platform: 'darwin' });
+  });
+
+  it('describes secure storage as computer storage away from macOS', async () => {
+    Object.assign(window.electron, { platform: 'linux' });
+    account.getStatus.mockResolvedValue(connected);
+    render(<GMAccount />);
+
+    expect(
+      await screen.findByText('Your session is kept in this computer’s secure storage.')
+    ).toBeInTheDocument();
   });
 
   it('moves focus into the API key field and back to the option that opened it', async () => {
