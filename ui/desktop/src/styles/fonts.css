@@ -1,0 +1,10 @@
+/*
+ * Local SayGM design-system fonts. Package versions are pinned in package.json;
+ * the Fontsource packages and their OFL-1.1 notices ship with the desktop app.
+ */
+@import '@fontsource-variable/onest/wght.css';
+@import '@fontsource-variable/geist-mono/wght.css';
+@import '@fontsource/instrument-serif/latin-400.css';
+@import '@fontsource/instrument-serif/latin-ext-400.css';
+@import '@fontsource/instrument-serif/latin-400-italic.css';
+@import '@fontsource/instrument-serif/latin-ext-400-italic.css';

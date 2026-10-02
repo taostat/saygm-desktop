@@ -1,0 +1,66 @@
+[
+  {
+    "id": "developer",
+    "name": "Developer",
+    "description": "General development tools useful for software engineering.",
+    "enabled": true,
+    "type": "builtin",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "computercontroller",
+    "name": "Computer Controller",
+    "description": "General computer control tools that don't require you to be a developer or engineer.",
+    "enabled": false,
+    "type": "builtin",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "autovisualiser",
+    "name": "Auto Visualiser",
+    "description": "Automatically see your data with this UI generation extension.",
+    "enabled": false,
+    "type": "builtin",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "memory",
+    "name": "Memory",
+    "description": "Teach SayGM your preferences as you go.",
+    "enabled": false,
+    "type": "builtin",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "todo",
+    "name": "todo",
+    "display_name": "Todo",
+    "description": "Keep track of tasks as you work.",
+    "enabled": false,
+    "type": "platform",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "tom",
+    "name": "tom",
+    "display_name": "Top Of Mind",
+    "description": "Add your own context to every conversation turn.",
+    "enabled": true,
+    "type": "platform",
+    "env_keys": [],
+    "timeout": 300
+  },
+  {
+    "id": "tutorial",
+    "name": "Tutorial",
+    "description": "Access interactive tutorials and guides",
+    "enabled": false,
+    "type": "builtin",
+    "env_keys": []
+  }
+]
