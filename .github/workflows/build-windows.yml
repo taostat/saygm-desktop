@@ -1,0 +1,210 @@
+name: Build SayGM Desktop for Windows
+
+on:
+  push:
+    branches:
+      - codex/windows-rc5-bundles
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saygm-desktop-windows-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-windows-x64:
+    name: Native Windows x64 build, installer, and smoke checks
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Install pnpm
+        shell: pwsh
+        run: npm install --global pnpm@10.30.3
+
+      - name: Set up native MSVC Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup toolchain install 1.96.1 --profile default --target x86_64-pc-windows-msvc
+          rustup default 1.96.1
+          rustup show
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version --verbose
+          cargo --version
+
+      - name: Activate native MSVC build tools
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+
+      - name: Verify native MSVC compiler
+        shell: pwsh
+        run: where.exe cl
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: saygm-desktop-windows-msvc-x64
+
+      - name: Build Goose backend for Windows x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release --target x86_64-pc-windows-msvc -p goose-cli --bin goose
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows Goose build failed ($LASTEXITCODE)." }
+          $backend = Resolve-Path "target/x86_64-pc-windows-msvc/release/goose.exe"
+          & $backend --version
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows Goose version check failed ($LASTEXITCODE)." }
+
+      - name: Prepare native desktop build
+        shell: pwsh
+        run: |
+          $binDir = "ui/desktop/src/bin"
+          Remove-Item $binDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/goose.exe" "$binDir/goose.exe"
+          Get-ChildItem "target/x86_64-pc-windows-msvc/release" -Filter "*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $binDir
+          }
+          if (-not (Test-Path "$binDir/goose.exe")) { throw "Native backend was not copied into the desktop bundle." }
+
+      - name: Install locked desktop dependencies
+        shell: pwsh
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and package SayGM Desktop
+        shell: pwsh
+        working-directory: ui/desktop
+        env:
+          ELECTRON_PLATFORM: win32
+          ELECTRON_ARCH: x64
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm run build-goose-acp-client
+          if ($LASTEXITCODE -ne 0) { throw "Goose ACP client build failed ($LASTEXITCODE)." }
+          node scripts/build-main.js
+          if ($LASTEXITCODE -ne 0) { throw "Main process build failed ($LASTEXITCODE)." }
+          node scripts/prepare-platform-binaries.js
+          if ($LASTEXITCODE -ne 0) { throw "Windows runtime binary preparation failed ($LASTEXITCODE)." }
+          pnpm run i18n:compile
+          if ($LASTEXITCODE -ne 0) { throw "Desktop message compilation failed ($LASTEXITCODE)." }
+          pnpm exec electron-forge package --platform=win32 --arch=x64
+          if ($LASTEXITCODE -ne 0) { throw "Electron Forge Windows packaging failed ($LASTEXITCODE)." }
+          $appDir = Resolve-Path "out/SayGM-win32-x64"
+          if (-not (Test-Path (Join-Path $appDir "SayGM.exe"))) { throw "Packaged SayGM.exe was not produced." }
+          if (-not (Test-Path (Join-Path $appDir "resources/bin/goose.exe"))) { throw "Packaged Windows Goose backend was not produced." }
+          if (-not (Test-Path (Join-Path $appDir "resources/bin/uv.exe"))) { throw "Pinned Windows uv.exe was not packaged." }
+
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-6.7.1.exe"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe" -OutFile $installer
+          $expected = "4D11E8050B6185E0D49BD9E8CC661A7A59F44959A621D31D11033124C4E8A7B0"
+          $actual = (Get-FileHash -Path $installer -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "Inno Setup installer checksum mismatch: $actual" }
+          $signature = Get-AuthenticodeSignature -FilePath $installer
+          $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { "<missing>" }
+          if ($signature.Status -ne "Valid" -or $signer -ne "Pyrsys B.V.") { throw "Inno Setup signature verification failed: status=$($signature.Status), signer=$signer" }
+          $process = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed ($($process.ExitCode))." }
+
+      - name: Build unsigned installer and portable archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
+          $app = Join-Path $env:GITHUB_WORKSPACE "ui/desktop/out/SayGM-win32-x64"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $iscc = "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc." }
+          & $iscc "/DAppVersion=0.1.0-rc.5" "/DSourceDir=$app" "/DOutputDir=$out" "scripts/windows/saygm-desktop-installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed ($LASTEXITCODE)." }
+          Compress-Archive -Path $app -DestinationPath (Join-Path $out "SayGM-0.1.0-rc.5-win-x64-portable.zip") -CompressionLevel Optimal
+
+      - name: Verify installer and packaged runtime on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
+          $installer = Join-Path $out "SayGM-0.1.0-rc.5-Setup-x64-unsigned.exe"
+          $portable = Join-Path $out "SayGM-0.1.0-rc.5-win-x64-portable.zip"
+          if (-not (Test-Path $installer)) { throw "Unsigned installer is missing." }
+          if (-not (Test-Path $portable)) { throw "Portable Windows x64 ZIP is missing." }
+
+          $smoke = Join-Path $env:RUNNER_TEMP "saygm-windows-smoke"
+          $installDir = Join-Path $smoke "Install"
+          $env:APPDATA = Join-Path $smoke "Roaming"
+          $env:LOCALAPPDATA = Join-Path $smoke "Local"
+          New-Item -ItemType Directory -Path $env:APPDATA,$env:LOCALAPPDATA -Force | Out-Null
+          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER", "/DIR=$installDir")
+          $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "SayGM installer smoke install failed ($($process.ExitCode))." }
+
+          $app = Join-Path $installDir "SayGM.exe"
+          $backend = Join-Path $installDir "resources/bin/goose.exe"
+          if (-not (Test-Path $app)) { throw "Installed SayGM.exe is missing." }
+          if (-not (Test-Path $backend)) { throw "Installed native backend is missing." }
+          $uninstallEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | ForEach-Object {
+            Get-ItemProperty $_.PSPath
+          } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }
+          if (-not $uninstallEntries) { throw "Per-user SayGM uninstall metadata was not registered." }
+          $uninstallEntry = $uninstallEntries | Select-Object -First 1
+          if ($uninstallEntry.DisplayVersion -ne "0.1.0-rc.5") { throw "Unexpected installed version metadata: $($uninstallEntry.DisplayVersion)." }
+          if ($uninstallEntry.UninstallString -notmatch "unins000\.exe") { throw "Per-user uninstall command metadata is missing." }
+          if (-not (Test-Path (Join-Path $installDir "unins000.exe"))) { throw "Per-user uninstaller was not installed." }
+
+          ./scripts/windows/verify-windows-dpapi.ps1 -ReportPath (Join-Path $out "dpapi-probe.json")
+          node scripts/qa-native-desktop.mjs --app $app --backend $backend --expect-storage available --report (Join-Path $out "qa-native-windows.json")
+          if ($LASTEXITCODE -ne 0) { throw "Native packaged desktop / ACP / secure-storage QA failed ($LASTEXITCODE)." }
+
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          $process = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "SayGM silent uninstall failed ($($process.ExitCode))." }
+          if (Test-Path $app) { throw "SayGM executable remains after uninstall." }
+          $remainingEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }
+          if ($remainingEntries) { throw "SayGM uninstall registry metadata remains after uninstall." }
+
+          Expand-Archive -Path $portable -DestinationPath (Join-Path $smoke "Portable")
+          if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "SayGM.exe" | Select-Object -First 1)) { throw "Portable archive lacks SayGM.exe." }
+          if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "goose.exe" | Select-Object -First 1)) { throw "Portable archive lacks the native backend." }
+
+      - name: Create artifact checksums
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
+          if (-not (Test-Path $out)) { exit 0 }
+          Get-ChildItem $out -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content (Join-Path $out "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Upload private CI artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-desktop-windows-x64-rc5-${{ github.sha }}
+          path: dist-windows/
+          if-no-files-found: error
+          retention-days: 90
