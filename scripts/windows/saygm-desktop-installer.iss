@@ -48,3 +48,42 @@ Name: "{autodesktop}\SayGM"; Filename: "{app}\SayGM.exe"; Tasks: desktopicon
 
 [Run]
 Filename: "{app}\SayGM.exe"; Description: "Launch SayGM"; Flags: postinstall skipifsilent
+
+[Code]
+function ProtocolHandlerIsOwnedByThisInstall: Boolean;
+var
+  Command: string;
+  Executable: string;
+  ExpectedExecutable: string;
+  QuotePos: Integer;
+begin
+  Result := False;
+  if not RegQueryStringValue(HKEY_CURRENT_USER,
+    'Software\Classes\saygm\shell\open\command', '', Command) then
+    Exit;
+
+  if (Length(Command) >= 2) and (Command[1] = '"') then
+  begin
+    QuotePos := Pos('"', Copy(Command, 2, Length(Command)));
+    if QuotePos = 0 then
+      Exit;
+    Executable := Copy(Command, 2, QuotePos - 1);
+  end
+  else
+  begin
+    QuotePos := Pos(' ', Command);
+    if QuotePos = 0 then
+      Executable := Command
+    else
+      Executable := Copy(Command, 1, QuotePos - 1);
+  end;
+
+  ExpectedExecutable := ExpandConstant('{app}\SayGM.exe');
+  Result := CompareText(Executable, ExpectedExecutable) = 0;
+end;
+
+procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
+begin
+  if (CurUninstallStep = usUninstall) and ProtocolHandlerIsOwnedByThisInstall then
+    RegDeleteKeyIncludingSubkeys(HKEY_CURRENT_USER, 'Software\Classes\saygm');
+end;

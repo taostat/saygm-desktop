@@ -190,14 +190,36 @@ jobs:
           if ($uninstallEntry.UninstallString -notmatch "unins000\.exe") { throw "Per-user uninstall command metadata is missing." }
           if (-not (Test-Path (Join-Path $installDir "unins000.exe"))) { throw "Per-user uninstaller was not installed." }
 
+          $protocolKey = "Registry::HKEY_CURRENT_USER\Software\Classes\saygm"
+          $protocolCommandKey = Join-Path $protocolKey "shell\open\command"
+          if (Test-Path $protocolKey) { throw "The isolated runner already has a saygm protocol handler; refusing to overwrite it." }
+
           ./scripts/windows/verify-windows-dpapi.ps1 -ReportPath (Join-Path $out "dpapi-probe.json")
           node scripts/qa-native-desktop.mjs --app $app --backend $backend --expect-storage available --report (Join-Path $out "qa-native-windows.json")
           if ($LASTEXITCODE -ne 0) { throw "Native packaged desktop / ACP / secure-storage QA failed ($LASTEXITCODE)." }
+
+          if (-not (Test-Path $protocolCommandKey)) { throw "SayGM did not register its protocol handler during native launch." }
+          $protocolCommand = [string](Get-Item $protocolCommandKey).GetValue("")
+          if (-not $protocolCommand) { throw "The saygm protocol handler has no command." }
+          if ($protocolCommand.StartsWith('"')) {
+            $closingQuote = $protocolCommand.IndexOf('"', 1)
+            if ($closingQuote -lt 2) { throw "The saygm protocol command has malformed executable quoting." }
+            $protocolExecutable = $protocolCommand.Substring(1, $closingQuote - 1)
+          } else {
+            $firstSpace = $protocolCommand.IndexOf(' ')
+            $protocolExecutable = if ($firstSpace -lt 0) { $protocolCommand } else { $protocolCommand.Substring(0, $firstSpace) }
+          }
+          if (-not [string]::Equals($protocolExecutable, $app, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The saygm protocol handler points to '$protocolExecutable', not this install '$app'."
+          }
+          [ordered]@{ registry_key = "HKCU\Software\Classes\saygm\shell\open\command"; command = $protocolCommand; executable = $protocolExecutable } |
+            ConvertTo-Json | Set-Content (Join-Path $out "protocol-handler.json") -Encoding utf8
 
           $uninstaller = Join-Path $installDir "unins000.exe"
           $process = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-") -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "SayGM silent uninstall failed ($($process.ExitCode))." }
           if (Test-Path $app) { throw "SayGM executable remains after uninstall." }
+          if (Test-Path $protocolKey) { throw "The SayGM-owned saygm protocol handler remains after uninstall." }
           $remainingEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | ForEach-Object {
             Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
           } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }

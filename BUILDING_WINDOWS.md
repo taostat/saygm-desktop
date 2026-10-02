@@ -10,8 +10,9 @@ The artifact includes the versioned installer, portable archive, SHA-256 sums,
 the native executable and DLL dependency report, and smoke reports. The smoke
 install checks the per-user uninstall record, launches the packaged renderer
 and local ACP backend with isolated profile data, verifies disposable OS
-credential storage and Windows DPAPI, and removes the test installation. It
-does not use customer credentials or make model requests.
+credential storage and Windows DPAPI, records the installed `saygm` protocol
+command, and removes that handler on uninstall only when it points to this
+installation. It does not use customer credentials or make model requests.
 
 For an internal test install, run the installer and follow the per-user prompts.
 To remove it, use **Settings → Apps → Installed apps → SayGM Desktop**, or run
