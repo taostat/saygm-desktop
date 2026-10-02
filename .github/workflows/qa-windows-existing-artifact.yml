@@ -22,6 +22,11 @@ jobs:
         with:
           node-version: 24.10.0
 
+      - name: Locate official MSVC redistributable files for the diagnostic fix
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756
+        with:
+          arch: amd64
+
       - name: Install locked QA dependencies
         run: |
           $ErrorActionPreference = 'Stop'
@@ -52,14 +57,41 @@ jobs:
           if ((Get-FileHash $app -Algorithm SHA256).Hash -ne '67eabbbad74c8bb77547d31838460c7e8eed3491508db9d2b5f75c692524558b') { throw 'Electron app hash differs.' }
           if ((Get-FileHash $backend -Algorithm SHA256).Hash -ne '55d5dc20f2edccc627c515c68189419f1a1ccf4237a7bd32599e97a26b842cff') { throw 'Embedded backend hash differs.' }
           if ((Get-FileHash $asar -Algorithm SHA256).Hash -ne '0530ef957ee7cab090aaf07b3dd560d5614f8fc7515bbe32147ab5da37ea3cc2') { throw 'ASAR hash differs.' }
+          if (-not $env:VCToolsRedistDir) { throw 'Active toolchain redist directory was not provided.' }
+          $requiredRuntime = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+          $runtimeDirectories = @(Get-ChildItem $env:VCToolsRedistDir -Directory -Recurse |
+            Where-Object { $_.Name -like 'Microsoft.VC*.CRT' -and $_.Parent.Name -eq 'x64' })
+          if ($runtimeDirectories.Count -ne 1) { throw 'Expected one matching x64 CRT directory in the active toolchain.' }
+          $runtimeSource = $runtimeDirectories[0].FullName
+          $runtimeEvidence = @()
+          foreach ($name in $requiredRuntime) {
+            $source = Join-Path $runtimeSource $name
+            $destination = Join-Path (Split-Path $backend) $name
+            if (Test-Path $destination) { throw 'First diagnostic artifact unexpectedly already has the runtime fix.' }
+            Copy-Item $source $destination
+            $signature = Get-AuthenticodeSignature $destination
+            $signer = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            if ($signature.Status -ne 'Valid' -or $signer -ne 'Microsoft Corporation') { throw 'Diagnostic runtime must have a valid Microsoft signature.' }
+            $runtimeEvidence += @{
+              name = $name
+              sha256 = (Get-FileHash $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+              file_version = (Get-Item $destination).VersionInfo.FileVersion
+              signer = $signer
+            }
+            Add-Content (Join-Path $reports 'runtime-dependencies.txt') "=== $name ==="
+            dumpbin /dependents $destination | Add-Content (Join-Path $reports 'runtime-dependencies.txt')
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic runtime dependency inspection failed.' }
+          }
           @{
             source_run = 37011708695
             source_commit = 'e2874a603bf751a2d53e571bd8c6097f8b33c9f9'
             source_artifact = 11234836488
             zip_sha256 = '9c79e3880c0a1ce0fe804513b916b465ebd0b1f5077559ca6a9a1ff5514f3c4d'
-            boundary = 'Diagnostic portable runtime only, not installer or release approval. This first artifact has a known missing app-local Visual C++ runtime prerequisite; the hosted runner provides those DLLs. No account login, customer credential, inference, or payment.'
+            boundary = 'Augmented diagnostic portable runtime only, not installer or release approval. App, backend and ASAR retain their pinned original hashes; the three missing runtime DLLs are added from the official active MSVC redist folder, with signatures and hashes recorded. No account login, customer credential, inference, or payment.'
+            added_runtime_source = $runtimeSource
+            added_runtime_files = $runtimeEvidence
             operating_system = (Get-CimInstance Win32_OperatingSystem).Caption
-          } | ConvertTo-Json | Set-Content (Join-Path $reports 'provenance.json')
+          } | ConvertTo-Json -Depth 4 | Set-Content (Join-Path $reports 'provenance.json')
           $protocolKey = 'HKCU:\Software\Classes\saygm'
           if (Test-Path $protocolKey) { throw 'Disposable runner unexpectedly has a preexisting SayGM protocol handler.' }
           try {
