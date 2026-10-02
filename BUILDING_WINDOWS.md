@@ -5,6 +5,11 @@ from this source revision with the repository's pinned Rust toolchain, then
 packages the Electron application on a native Windows x64 runner. It produces
 an unsigned per-user installer and a portable ZIP. The workflow uploads them
 as private GitHub Actions artifacts and does not publish a GitHub release.
+The x64 Microsoft Visual C++ runtime DLLs imported by Goose are copied from the
+Visual Studio redistributable files beside the backend. This lets the portable
+bundle run without a machine-wide Visual C++ runtime installation; the bundled
+runtime files are covered by the artifact checksums and should be refreshed by
+building again with the pinned workflow when the toolchain is updated.
 
 The artifact includes the versioned installer, portable archive, SHA-256 sums,
 the native executable and DLL dependency report, and smoke reports. The smoke

@@ -78,6 +78,8 @@ jobs:
       - name: Prepare native desktop build
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
           $binDir = "ui/desktop/src/bin"
           Remove-Item $binDir -Recurse -Force -ErrorAction SilentlyContinue
           New-Item -ItemType Directory -Path $binDir -Force | Out-Null
@@ -86,6 +88,55 @@ jobs:
             Copy-Item $_.FullName $binDir
           }
           if (-not (Test-Path "$binDir/goose.exe")) { throw "Native backend was not copied into the desktop bundle." }
+
+          $requiredRuntime = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
+          $redistRoots = @()
+          if ($env:VCToolsRedistDir) { $redistRoots += $env:VCToolsRedistDir }
+          if ($env:VCINSTALLDIR) { $redistRoots += (Join-Path $env:VCINSTALLDIR "Redist/MSVC") }
+          $runtimeSource = $null
+          foreach ($root in ($redistRoots | Select-Object -Unique)) {
+            if (-not (Test-Path $root)) { continue }
+            $crtDirectories = Get-ChildItem -Path $root -Directory -Recurse -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -like "Microsoft.VC*.CRT" -and $_.Parent.Name -eq "x64" }
+            $orderedDirectories = foreach ($directory in $crtDirectories) {
+              $version = [Version]"0.0"
+              if (-not [Version]::TryParse($directory.Parent.Parent.Name, [ref]$version)) { $version = [Version]"0.0" }
+              [pscustomobject]@{ Directory = $directory; Version = $version }
+            }
+            foreach ($candidate in ($orderedDirectories | Sort-Object Version -Descending)) {
+              $directory = $candidate.Directory
+              if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
+                $runtimeSource = $directory.FullName
+                break
+              }
+            }
+            if ($runtimeSource) { break }
+          }
+          if (-not $runtimeSource) {
+            throw "Could not locate x64 Visual C++ runtime DLLs in the active VCToolsRedistDir or version-ordered VCINSTALLDIR fallback."
+          }
+          $runtimeEvidence = @()
+          foreach ($name in $requiredRuntime) {
+            $source = Join-Path $runtimeSource $name
+            $destination = Join-Path $binDir $name
+            Copy-Item $source $destination
+            $signature = Get-AuthenticodeSignature -FilePath $destination
+            if ($signature.Status -ne "Valid") { throw "Microsoft runtime signature check failed for ${name}: $($signature.Status)." }
+            $runtimeEvidence += [ordered]@{
+              name = $name
+              sha256 = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+              file_version = (Get-Item -Path $destination).VersionInfo.FileVersion
+              product_version = (Get-Item -Path $destination).VersionInfo.ProductVersion
+              signer = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+            }
+          }
+          if (($runtimeEvidence | Where-Object { $_.signer -ne "Microsoft Corporation" }).Count -gt 0) {
+            throw "A bundled VC runtime DLL is not signed by Microsoft Corporation."
+          }
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          [ordered]@{ architecture = "x64"; source_directory = $runtimeSource; files = $runtimeEvidence } |
+            ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dist "windows-vc-runtime.json") -Encoding utf8
 
       - name: Install locked desktop dependencies
         shell: pwsh
@@ -117,6 +168,13 @@ jobs:
             $imports = & dumpbin /dependents $file.FullName 2>&1
             if ($LASTEXITCODE -ne 0) { throw "dumpbin dependency inspection failed for $($file.Name) ($LASTEXITCODE)." }
             Add-Content -Path $dependencyReport -Value $imports
+            if ($file.Name -eq "goose.exe") {
+              foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+                if (-not (($imports | Out-String) -match "(?im)^\s*$([regex]::Escape($runtimeName))\s*$")) {
+                  throw "Goose does not list the expected app-local runtime dependency $runtimeName."
+                }
+              }
+            }
           }
           if (-not ($peFiles.Name -contains "goose.exe")) { throw "Native PE audit did not include goose.exe." }
           pnpm run i18n:compile
@@ -127,6 +185,11 @@ jobs:
           if (-not (Test-Path (Join-Path $appDir "SayGM.exe"))) { throw "Packaged SayGM.exe was not produced." }
           if (-not (Test-Path (Join-Path $appDir "resources/bin/goose.exe"))) { throw "Packaged Windows Goose backend was not produced." }
           if (-not (Test-Path (Join-Path $appDir "resources/bin/uv.exe"))) { throw "Pinned Windows uv.exe was not packaged." }
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path $appDir "resources/bin/$runtimeName"))) {
+              throw "Packaged Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
 
       - name: Install pinned Inno Setup compiler
         shell: pwsh
@@ -182,6 +245,11 @@ jobs:
           $backend = Join-Path $installDir "resources/bin/goose.exe"
           if (-not (Test-Path $app)) { throw "Installed SayGM.exe is missing." }
           if (-not (Test-Path $backend)) { throw "Installed native backend is missing." }
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path (Split-Path $backend) $runtimeName))) {
+              throw "Installed Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
           $uninstallEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | ForEach-Object {
             Get-ItemProperty $_.PSPath
           } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }
@@ -228,7 +296,13 @@ jobs:
 
           Expand-Archive -Path $portable -DestinationPath (Join-Path $smoke "Portable")
           if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "SayGM.exe" | Select-Object -First 1)) { throw "Portable archive lacks SayGM.exe." }
-          if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "goose.exe" | Select-Object -First 1)) { throw "Portable archive lacks the native backend." }
+          $portableBackend = Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "goose.exe" | Select-Object -First 1
+          if (-not $portableBackend) { throw "Portable archive lacks the native backend." }
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path $portableBackend.DirectoryName $runtimeName))) {
+              throw "Portable Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
 
       - name: Create artifact checksums
         if: always()
