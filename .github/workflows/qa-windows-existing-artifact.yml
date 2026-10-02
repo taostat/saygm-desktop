@@ -138,7 +138,16 @@ jobs:
               removed_owned_protocol = $removedOwnedProtocol
               boundary = 'Only the handler owned by this disposable portable app is removed.'
             } | ConvertTo-Json | Set-Content (Join-Path $reports 'protocol-cleanup.json')
-            Remove-Item $extraction -Recurse -Force
+            for ($attempt = 0; $attempt -lt 10; $attempt++) {
+              try {
+                Remove-Item $extraction -Recurse -Force -ErrorAction Stop
+                break
+              } catch {
+                if ($attempt -eq 9) { throw }
+                Start-Sleep -Milliseconds 500
+              }
+            }
+            if (Test-Path $extraction) { throw 'Disposable portable extraction remains after cleanup.' }
           }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
