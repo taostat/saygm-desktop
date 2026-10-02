@@ -15,7 +15,14 @@ for (let index = 2; index < process.argv.length; index += 2) {
   assert(process.argv[index].startsWith('--') && process.argv[index + 1], 'Use named option/value pairs');
   args[process.argv[index].slice(2)] = process.argv[index + 1];
 }
-for (const name of ['deb', 'zip', 'source-backend', 'report']) assert(args[name], `Missing --${name}`);
+for (const name of ['deb', 'zip', 'source-backend', 'arch', 'report']) assert(args[name], `Missing --${name}`);
+
+const architectures = {
+  x64: { debian: 'amd64', machine: /Machine:\s+Advanced Micro Devices X86-64/ },
+  arm64: { debian: 'arm64', machine: /Machine:\s+AArch64/ },
+};
+const expectedArchitecture = architectures[args.arch];
+assert(expectedArchitecture, `Unsupported Ubuntu architecture ${args.arch}`);
 
 const sha256 = async (filename) => createHash('sha256').update(await fs.readFile(filename)).digest('hex');
 const output = (command) => execFileSync(command[0], command.slice(1), { encoding: 'utf8' }).trim();
@@ -24,7 +31,7 @@ const version = output(['dpkg-deb', '--field', args.deb, 'Version']);
 const architecture = output(['dpkg-deb', '--field', args.deb, 'Architecture']);
 assert.equal(packageName, 'saygm');
 assert.equal(version, '0.1.0~rc.5');
-assert.equal(architecture, 'amd64');
+assert.equal(architecture, expectedArchitecture.debian);
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-deb-verify-'));
 try {
@@ -86,8 +93,9 @@ try {
   const expectedBackendHash = await sha256(args['source-backend']);
   assert.equal(await sha256(debBackend), expectedBackendHash, 'Debian package backend must match Cargo output');
   assert.equal(await sha256(zipBackend), expectedBackendHash, 'Portable package backend must match Cargo output');
-  const machine = output(['readelf', '-h', debBackend]);
-  assert.match(machine, /Machine:\s+Advanced Micro Devices X86-64/);
+  for (const executable of [debApp, debBackend, zipApp, zipBackend]) {
+    assert.match(output(['readelf', '-h', executable]), expectedArchitecture.machine, `${executable} has the wrong ELF architecture`);
+  }
   const ldd = output(['ldd', debBackend]);
   assert(!ldd.includes('not found'), 'Bundled backend has a missing shared library');
   const dependencies = output(['dpkg-deb', '--field', args.deb, 'Depends']);
@@ -117,6 +125,7 @@ try {
     package: packageName,
     debian_version: version,
     desktop_version: '0.1.0-rc.5',
+    build_arch: args.arch,
     architecture,
     deb_sha256: await sha256(args.deb),
     zip_sha256: await sha256(args.zip),

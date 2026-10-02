@@ -1,13 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ "$(uname -s)" != Linux || "$(uname -m)" != x86_64 ]]; then
-  echo "This release build must run on native Ubuntu x86_64." >&2
-  exit 2
-fi
-
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-artifact_dir="${1:?Usage: scripts/build-ubuntu-release.sh <artifact-directory>}"
+artifact_dir="${1:?Usage: scripts/build-ubuntu-release.sh <artifact-directory> <x64|arm64>}"
+build_arch="${2:?Usage: scripts/build-ubuntu-release.sh <artifact-directory> <x64|arm64>}"
 artifact_dir="$(mkdir -p "$artifact_dir" && cd "$artifact_dir" && pwd)"
 build_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 build_out=""
@@ -16,6 +12,27 @@ source_goose="$repo_root/target/release/goose"
 temporary_stage="${staged_goose}.rc5-tmp"
 release_version="$(node -p "require('$repo_root/ui/desktop/package.json').version")"
 
+case "$build_arch" in
+  x64)
+    expected_host_arch=x86_64
+    expected_machine='Advanced Micro Devices X86-64'
+    debian_arch=amd64
+    ;;
+  arm64)
+    expected_host_arch=aarch64
+    expected_machine=AArch64
+    debian_arch=arm64
+    ;;
+  *)
+    echo "Unsupported Ubuntu architecture: $build_arch" >&2
+    exit 2
+    ;;
+esac
+
+if [[ "$(uname -s)" != Linux || "$(uname -m)" != "$expected_host_arch" ]]; then
+  echo "This release build must run on native Ubuntu $expected_host_arch." >&2
+  exit 2
+fi
 if [[ "$release_version" != 0.1.0-rc.5 ]]; then
   echo "Expected desktop version 0.1.0-rc.5, found $release_version." >&2
   exit 2
@@ -50,7 +67,7 @@ trap cleanup EXIT
 cd "$repo_root"
 cargo build --locked --release -p goose-cli --bin goose
 test -x "$source_goose"
-readelf -h "$source_goose" | grep -F 'Machine:                           Advanced Micro Devices X86-64'
+readelf -h "$source_goose" | grep -F "$expected_machine"
 source_hash="$(sha256sum "$source_goose" | cut -d ' ' -f 1)"
 install -m 0755 "$source_goose" "$temporary_stage"
 mv "$temporary_stage" "$staged_goose"
@@ -58,9 +75,9 @@ staged=true
 
 pnpm --dir ui/desktop run build-goose-acp-client
 pnpm --dir ui/desktop run i18n:compile
-SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH=x64 pnpm --dir ui/desktop exec electron-forge make \
+SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH="$build_arch" pnpm --dir ui/desktop exec electron-forge make \
   --platform=linux \
-  --arch=x64 \
+  --arch="$build_arch" \
   --targets=@electron-forge/maker-deb,@electron-forge/maker-zip
 
 deb_source="$(find "$build_out" -type f -name '*.deb' -print -quit)"
@@ -71,8 +88,8 @@ if [[ -z "$deb_source" || -z "$zip_source" ]]; then
   exit 1
 fi
 
-final_deb="$artifact_dir/SayGM-${release_version}-linux-x64.deb"
-final_zip="$artifact_dir/SayGM-${release_version}-linux-x64.zip"
+final_deb="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.deb"
+final_zip="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.zip"
 if [[ -e "$final_deb" || -e "$final_zip" ]]; then
   echo "Refusing to overwrite existing Ubuntu RC5 artifacts in $artifact_dir." >&2
   exit 2
@@ -169,12 +186,13 @@ node "$repo_root/scripts/verify-ubuntu-release.mjs" \
   --deb "$final_deb" \
   --zip "$final_zip" \
   --source-backend "$source_goose" \
+  --arch "$build_arch" \
   --report "$artifact_dir/package-verification.json"
 
 cat > "$artifact_dir/INSTALL-UBUNTU.txt" <<EOF
-SayGM Desktop ${release_version} for Ubuntu x86_64
+SayGM Desktop ${release_version} for Ubuntu ${build_arch}
 
-Install the Debian package with: sudo apt install ./SayGM-${release_version}-linux-x64.deb
+Install the Debian package with: sudo apt install ./SayGM-${release_version}-linux-${build_arch}.deb
 The portable ZIP contains the app and can be extracted and launched without installing the package.
 
 Linux credentials require an unlocked Secret Service provider such as GNOME Keyring.
@@ -186,7 +204,7 @@ EOF
 
 cat > "$artifact_dir/BUILD-INFO.txt" <<EOF
 Version: ${release_version}
-Platform: Ubuntu 22.04 x86_64
+Platform: Ubuntu 22.04 ${build_arch}
 Backend source: target/release/goose built by cargo build --locked --release -p goose-cli --bin goose
 Backend SHA-256: ${source_hash}
 Build commit: $(git -C "$repo_root" rev-parse HEAD)

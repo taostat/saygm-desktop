@@ -2,15 +2,29 @@ name: Build Ubuntu desktop artifacts
 
 on:
   workflow_dispatch:
+    inputs:
+      architecture:
+        description: Ubuntu build target
+        type: choice
+        required: true
+        default: both
+        options:
+          - both
+          - x64
+          - arm64
 
 permissions:
   contents: read
 
 jobs:
   build:
-    name: Ubuntu 22.04 x64 RC5
-    runs-on: ubuntu-22.04
+    name: Ubuntu 22.04 ${{ matrix.architecture }} RC5
+    runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 150
+    strategy:
+      fail-fast: false
+      matrix:
+        architecture: ${{ fromJSON(inputs.architecture == 'both' && '["x64","arm64"]' || format('["{0}"]', inputs.architecture)) }}
     steps:
       - uses: actions/checkout@v4
 
@@ -43,19 +57,19 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ubuntu-22.04-x64-rc5
+          key: ubuntu-22.04-${{ matrix.architecture }}-rc5
           cache-on-failure: true
 
       - name: Install locked Node workspace
         run: pnpm --dir ui install --frozen-lockfile
 
-      - name: Build, package, and verify Ubuntu x64 artifacts
-        run: scripts/build-ubuntu-release.sh "$GITHUB_WORKSPACE/artifacts"
+      - name: Build, package, and verify Ubuntu ${{ matrix.architecture }} artifacts
+        run: scripts/build-ubuntu-release.sh "$GITHUB_WORKSPACE/artifacts" "${{ matrix.architecture }}"
 
       - name: Install and inspect Debian package
         run: |
-          sudo apt-get install --yes --no-install-recommends ./artifacts/SayGM-0.1.0-rc.5-linux-x64.deb
-          test "$(dpkg-query -W -f='${Architecture}' saygm)" = amd64
+          sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb"
+          test "$(dpkg-query -W -f='${Architecture}' saygm)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
           test -x /usr/bin/saygm
           test -x /usr/lib/saygm/SayGM
           test -x /usr/lib/saygm/resources/bin/goose
@@ -85,12 +99,14 @@ jobs:
             xvfb-run -a node scripts/qa-native-desktop.mjs \
               --app /usr/lib/saygm/SayGM \
               --backend /usr/lib/saygm/resources/bin/goose \
+              --expect-arch "${{ matrix.architecture }}" \
               --expect-storage available \
               --password-store gnome-libsecret \
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-secret-service.json"
             xvfb-run -a node scripts/qa-native-desktop.mjs \
               --app /usr/lib/saygm/SayGM \
               --backend /usr/lib/saygm/resources/bin/goose \
+              --expect-arch "${{ matrix.architecture }}" \
               --expect-storage unavailable \
               --password-store basic \
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-basic-storage.json"
@@ -99,12 +115,12 @@ jobs:
       - name: Write final checksums
         run: |
           cd artifacts
-          sha256sum SayGM-0.1.0-rc.5-linux-x64.deb SayGM-0.1.0-rc.5-linux-x64.zip > SHA256SUMS.txt
+          sha256sum "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb" "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: saygm-desktop-0.1.0-rc.5-ubuntu-x64-run-${{ github.run_id }}
+          name: saygm-desktop-0.1.0-rc.5-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
