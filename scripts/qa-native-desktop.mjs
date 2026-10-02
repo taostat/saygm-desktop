@@ -55,7 +55,7 @@ const report = {
   started_at: new Date().toISOString(),
   platform: process.platform,
   architecture: process.arch,
-  boundary: 'Actual installed app and embedded backend; isolated app-data and disposable non-authoritative fixture only. No account login, customer credential, inference, or payment. CDP is bound to loopback for this test only.',
+  boundary: 'Actual packaged app and embedded backend; isolated app-data and disposable non-authoritative fixture only. No account login, customer credential, inference, or payment. CDP is bound to loopback for this test only. The invoking workflow records whether the app was installed or extracted from a portable archive.',
   expected_storage: options['expect-storage'],
   app_sha256: createHash('sha256').update(await fs.readFile(appPath)).digest('hex'),
   backend_sha256: createHash('sha256').update(await fs.readFile(backendPath)).digest('hex'),
@@ -166,7 +166,7 @@ async function start() {
   if (process.platform === 'win32') {
     await assert.rejects(fs.access(path.join(temporary, 'local', 'Goose')), { code: 'ENOENT' }, 'SayGM must not write upstream Goose helper directories');
   }
-  await note('Installed app renderer, preload, isolated storage, local TLS backend and disabled updater are live', {
+  await note('Packaged app renderer, preload, isolated storage, local TLS backend and disabled updater are live', {
     version: details.version, secure_storage_available: details.status.secureStorageAvailable,
   });
   await instance.page.evaluate(async () => {
@@ -271,6 +271,15 @@ try {
     assert(error && /secure|storage|credential/i.test(error), 'Unprotected storage must prevent OAuth setup before device authorization');
     await note('Linux basic_text storage fails closed before OAuth setup');
   }
+  await active.page.getByRole('heading', { name: 'Connect SayGM', exact: true }).waitFor({ state: 'visible', timeout: 30000 });
+  const signIn = active.page.getByRole('button', { name: /^Continue in browser/ });
+  if (options['expect-storage'] === 'unavailable') {
+    await active.page.getByRole('alert').filter({ hasText: 'SayGM could not access secure storage.' }).waitFor({ state: 'visible', timeout: 30000 });
+    assert.equal(await signIn.isDisabled(), true, 'Onboarding must disable sign-in when storage is unprotected');
+  } else {
+    assert.equal(await signIn.isEnabled(), true, 'Fresh protected profile must present browser sign-in');
+  }
+  await note('Fresh-profile onboarding rendered with the expected sign-in availability');
   await active.page.screenshot({ path: reportPath.replace(/\.json$/, '') + '.png' });
   report.result = 'passed';
 } catch (error) {
