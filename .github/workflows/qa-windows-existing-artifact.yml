@@ -59,10 +59,22 @@ jobs:
           if ((Get-FileHash $asar -Algorithm SHA256).Hash -ne '0530ef957ee7cab090aaf07b3dd560d5614f8fc7515bbe32147ab5da37ea3cc2') { throw 'ASAR hash differs.' }
           if (-not $env:VCToolsRedistDir) { throw 'Active toolchain redist directory was not provided.' }
           $requiredRuntime = @('msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
-          $runtimeDirectories = @(Get-ChildItem $env:VCToolsRedistDir -Directory -Recurse |
-            Where-Object { $_.Name -like 'Microsoft.VC*.CRT' -and $_.Parent.Name -eq 'x64' })
-          if ($runtimeDirectories.Count -ne 1) { throw 'Expected one matching x64 CRT directory in the active toolchain.' }
-          $runtimeSource = $runtimeDirectories[0].FullName
+          $runtimeRoots = @($env:VCToolsRedistDir, (Join-Path $env:VCINSTALLDIR 'Redist/MSVC')) | Select-Object -Unique
+          $runtimeCandidates = @()
+          foreach ($root in $runtimeRoots) {
+            if (-not (Test-Path $root)) { continue }
+            $runtimeDirectories = @(Get-ChildItem $root -Directory -Recurse |
+              Where-Object { $_.Name -like 'Microsoft.VC*.CRT' -and $_.Parent.Name -eq 'x64' })
+            foreach ($directory in $runtimeDirectories) {
+              if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -ne 0) { continue }
+              $version = [Version](Get-Item (Join-Path $directory.FullName 'vcruntime140.dll')).VersionInfo.FileVersion
+              $runtimeCandidates += [pscustomobject]@{ Directory = $directory.FullName; Version = $version }
+            }
+            if ($runtimeCandidates.Count -gt 0) { break }
+          }
+          @{ roots = $runtimeRoots; candidates = $runtimeCandidates } | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $reports 'runtime-discovery.json')
+          if ($runtimeCandidates.Count -lt 1) { throw 'No complete official x64 CRT directory was found.' }
+          $runtimeSource = ($runtimeCandidates | Sort-Object Version -Descending | Select-Object -First 1).Directory
           $runtimeEvidence = @()
           foreach ($name in $requiredRuntime) {
             $source = Join-Path $runtimeSource $name
