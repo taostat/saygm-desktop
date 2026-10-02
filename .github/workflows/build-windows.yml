@@ -90,27 +90,48 @@ jobs:
           if (-not (Test-Path "$binDir/goose.exe")) { throw "Native backend was not copied into the desktop bundle." }
 
           $requiredRuntime = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
-          $redistRoots = @()
-          if ($env:VCToolsRedistDir) { $redistRoots += $env:VCToolsRedistDir }
-          if ($env:VCINSTALLDIR) { $redistRoots += (Join-Path $env:VCINSTALLDIR "Redist/MSVC") }
           $runtimeSource = $null
-          foreach ($root in ($redistRoots | Select-Object -Unique)) {
-            if (-not (Test-Path $root)) { continue }
-            $crtDirectories = Get-ChildItem -Path $root -Directory -Recurse -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -like "Microsoft.VC*.CRT" -and $_.Parent.Name -eq "x64" }
-            $orderedDirectories = foreach ($directory in $crtDirectories) {
-              $version = [Version]"0.0"
-              if (-not [Version]::TryParse($directory.Parent.Parent.Name, [ref]$version)) { $version = [Version]"0.0" }
-              [pscustomobject]@{ Directory = $directory; Version = $version }
-            }
-            foreach ($candidate in ($orderedDirectories | Sort-Object Version -Descending)) {
-              $directory = $candidate.Directory
-              if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
-                $runtimeSource = $directory.FullName
-                break
+          if ($env:VCToolsRedistDir) {
+            $activeDesktopX64 = Join-Path $env:VCToolsRedistDir "x64"
+            if (Test-Path $activeDesktopX64) {
+              $activeRuntimeDirectories = @(Get-ChildItem -Path $activeDesktopX64 -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "Microsoft.VC*.CRT" })
+              foreach ($directory in $activeRuntimeDirectories) {
+                if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
+                  $runtimeSource = $directory.FullName
+                  break
+                }
               }
             }
-            if ($runtimeSource) { break }
+          }
+          if (-not $runtimeSource -and $env:VCINSTALLDIR) {
+            $fallbackRoot = Join-Path $env:VCINSTALLDIR "Redist/MSVC"
+            if (Test-Path $fallbackRoot) {
+              $fallbackVersionRoots = @((Get-Item $fallbackRoot)) + @(Get-ChildItem -Path $fallbackRoot -Directory -ErrorAction SilentlyContinue)
+              $orderedVersionRoots = foreach ($versionRoot in $fallbackVersionRoots) {
+                $version = [Version]"0.0"
+                $versionName = $versionRoot.Name
+                if ($versionName -match "^v(?<major>14)(?<minor>\d)$") {
+                  $version = [Version]("$($Matches.major).$($Matches.minor)")
+                } elseif (-not [Version]::TryParse($versionName, [ref]$version)) {
+                  $version = [Version]"0.0"
+                }
+                [pscustomobject]@{ Directory = $versionRoot; Version = $version }
+              }
+              foreach ($versionRoot in ($orderedVersionRoots | Sort-Object Version -Descending)) {
+                $desktopX64 = Join-Path $versionRoot.Directory.FullName "x64"
+                if (-not (Test-Path $desktopX64)) { continue }
+                $fallbackRuntimeDirectories = @(Get-ChildItem -Path $desktopX64 -Directory -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -like "Microsoft.VC*.CRT" })
+                foreach ($directory in $fallbackRuntimeDirectories) {
+                  if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
+                    $runtimeSource = $directory.FullName
+                    break
+                  }
+                }
+                if ($runtimeSource) { break }
+              }
+            }
           }
           if (-not $runtimeSource) {
             throw "Could not locate x64 Visual C++ runtime DLLs in the active VCToolsRedistDir or version-ordered VCINSTALLDIR fallback."
@@ -122,16 +143,22 @@ jobs:
             Copy-Item $source $destination
             $signature = Get-AuthenticodeSignature -FilePath $destination
             if ($signature.Status -ne "Valid") { throw "Microsoft runtime signature check failed for ${name}: $($signature.Status)." }
+            $certificate = $signature.SignerCertificate
+            $certificateSubject = if ($certificate) { $certificate.Subject } else { "<missing>" }
+            if (-not $certificate -or $certificateSubject -notmatch "(?i)(^|,\s*)O=Microsoft Corporation(,|$)") {
+              throw "Microsoft runtime certificate organization check failed for ${name}: $certificateSubject."
+            }
             $runtimeEvidence += [ordered]@{
               name = $name
               sha256 = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLowerInvariant()
               file_version = (Get-Item -Path $destination).VersionInfo.FileVersion
               product_version = (Get-Item -Path $destination).VersionInfo.ProductVersion
-              signer = $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+              signer = $certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+              certificate_subject = $certificateSubject
+              certificate_issuer = $certificate.Issuer
+              certificate_thumbprint = $certificate.Thumbprint
+              signature_status = $signature.Status.ToString()
             }
-          }
-          if (($runtimeEvidence | Where-Object { $_.signer -ne "Microsoft Corporation" }).Count -gt 0) {
-            throw "A bundled VC runtime DLL is not signed by Microsoft Corporation."
           }
           $dist = Join-Path $env:GITHUB_WORKSPACE "dist-windows"
           New-Item -ItemType Directory -Path $dist -Force | Out-Null
