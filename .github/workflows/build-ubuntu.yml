@@ -26,7 +26,7 @@ jobs:
       matrix:
         architecture: ${{ fromJSON(inputs.architecture == 'both' && '["x64","arm64"]' || format('["{0}"]', inputs.architecture)) }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Install system build and smoke dependencies
         run: |
