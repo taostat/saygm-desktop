@@ -22,7 +22,7 @@ jobs:
             libasound2-dev libdbus-1-dev libsecret-1-dev libxcb1-dev \
             libxcb-util-dev libxkbfile-dev libx11-xcb-dev libxss-dev \
             libnss3-dev libgbm-dev libgtk-3-dev libnotify-dev \
-            libgdk-pixbuf2.0-dev libvulkan-dev libvulkan1 glslc \
+            libgdk-pixbuf2.0-dev libvulkan-dev libvulkan1 \
             protobuf-compiler pkg-config python3 unzip xvfb xauth \
             dbus-x11 gnome-keyring libsecret-tools
 
