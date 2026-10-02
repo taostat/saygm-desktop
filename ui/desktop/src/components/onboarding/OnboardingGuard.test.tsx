@@ -34,6 +34,12 @@ const gmAccount = vi.hoisted(() => ({
 
 vi.mock('../../acp/providers', () => providers);
 vi.mock('../../acp/config', () => config);
+vi.mock('../ConfigContext', () => ({
+  useConfig: () => ({
+    read: config.acpReadConfig,
+    upsert: config.acpUpsertConfig,
+  }),
+}));
 
 vi.mock('./GMAccount', () => ({
   default: ({ onConnected }: { onConnected?: () => void }) => (

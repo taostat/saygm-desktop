@@ -14,6 +14,8 @@ import { createSession } from './sessions';
 import { RecipeParameterScopesUnsupportedError } from './acp/errors';
 
 const mockToastError = vi.hoisted(() => vi.fn());
+const mockConfigRead = vi.hoisted(() => vi.fn().mockResolvedValue('approve'));
+const mockConfigUpsert = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
 
 // Set up globals for jsdom
 Object.defineProperty(window, 'location', {
@@ -71,7 +73,7 @@ vi.mock('./acp/providers', () => ({
   acpListProviderDetails: vi.fn().mockResolvedValue([]),
 }));
 
-// OnboardingGuard also reads and seeds the tool approval mode through ACP config.
+// ConfigProvider exposes the tool approval mode to OnboardingGuard through these methods.
 vi.mock('./acp/config', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./acp/config')>()),
   acpReadConfig: vi.fn().mockResolvedValue('approve'),
@@ -81,7 +83,8 @@ vi.mock('./acp/config', async (importOriginal) => ({
 // Mock the ConfigContext module
 vi.mock('./components/ConfigContext', () => ({
   useConfig: () => ({
-    read: vi.fn().mockResolvedValue(null),
+    read: mockConfigRead,
+    upsert: mockConfigUpsert,
     update: vi.fn(),
     getExtensions: vi.fn().mockReturnValue([]),
     addExtension: vi.fn(),
