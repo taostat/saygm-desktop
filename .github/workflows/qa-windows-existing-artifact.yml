@@ -1,0 +1,92 @@
+name: QA existing Windows RC5 artifact
+
+on:
+  push:
+    branches: [codex/qa-windows-rc5-native]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  native-artifact-smoke:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: 24.10.0
+
+      - name: Install locked QA dependencies
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm install --global pnpm@10.30.3
+          pnpm --dir ui install --frozen-lockfile
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          artifact-ids: '11234836488'
+          run-id: '37011708695'
+          github-token: ${{ github.token }}
+          path: downloaded-artifact
+
+      - name: Verify immutable compiled artifact and run diagnostic native smoke
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $reports = Join-Path $env:GITHUB_WORKSPACE 'qa-reports'
+          New-Item -ItemType Directory -Path $reports -Force | Out-Null
+          $portable = Join-Path $env:GITHUB_WORKSPACE 'downloaded-artifact/SayGM-0.1.0-rc.5-win-x64-portable.zip'
+          if ((Get-FileHash $portable -Algorithm SHA256).Hash -ne '9c79e3880c0a1ce0fe804513b916b465ebd0b1f5077559ca6a9a1ff5514f3c4d') { throw 'Portable ZIP hash differs from the reviewed artifact.' }
+          $extraction = Join-Path $env:RUNNER_TEMP 'saygm-qa-portable'
+          Expand-Archive -Path $portable -DestinationPath $extraction
+          $app = Join-Path $extraction 'SayGM-win32-x64/SayGM.exe'
+          $backend = Join-Path $extraction 'SayGM-win32-x64/resources/bin/goose.exe'
+          $asar = Join-Path $extraction 'SayGM-win32-x64/resources/app.asar'
+          if ((Get-FileHash $app -Algorithm SHA256).Hash -ne '67eabbbad74c8bb77547d31838460c7e8eed3491508db9d2b5f75c692524558b') { throw 'Electron app hash differs.' }
+          if ((Get-FileHash $backend -Algorithm SHA256).Hash -ne '55d5dc20f2edccc627c515c68189419f1a1ccf4237a7bd32599e97a26b842cff') { throw 'Embedded backend hash differs.' }
+          if ((Get-FileHash $asar -Algorithm SHA256).Hash -ne '0530ef957ee7cab090aaf07b3dd560d5614f8fc7515bbe32147ab5da37ea3cc2') { throw 'ASAR hash differs.' }
+          @{
+            source_run = 37011708695
+            source_commit = 'e2874a603bf751a2d53e571bd8c6097f8b33c9f9'
+            source_artifact = 11234836488
+            zip_sha256 = '9c79e3880c0a1ce0fe804513b916b465ebd0b1f5077559ca6a9a1ff5514f3c4d'
+            boundary = 'Diagnostic portable runtime only, not installer or release approval. This first artifact has a known missing app-local Visual C++ runtime prerequisite; the hosted runner provides those DLLs. No account login, customer credential, inference, or payment.'
+            operating_system = (Get-CimInstance Win32_OperatingSystem).Caption
+          } | ConvertTo-Json | Set-Content (Join-Path $reports 'provenance.json')
+          $protocolKey = 'HKCU:\Software\Classes\saygm'
+          if (Test-Path $protocolKey) { throw 'Disposable runner unexpectedly has a preexisting SayGM protocol handler.' }
+          try {
+            node scripts/qa-native-desktop.mjs --app $app --backend $backend --expect-arch x64 --expect-storage available --report (Join-Path $reports 'qa-native-windows.json')
+            if ($LASTEXITCODE -ne 0) { throw 'Diagnostic native app smoke failed.' }
+          } finally {
+            $removedOwnedProtocol = $false
+            if (Test-Path $protocolKey) {
+              $command = (Get-Item (Join-Path $protocolKey 'shell\open\command')).GetValue('')
+              if ($command -match '^"([^"]+)"') { $handler = $Matches[1] }
+              else { $handler = ($command -split '\s+')[0] }
+              if ([IO.Path]::GetFullPath($handler) -ine [IO.Path]::GetFullPath($app)) { throw 'A different protocol handler appeared; preserving it and failing cleanup.' }
+              Remove-Item $protocolKey -Recurse -Force
+              $removedOwnedProtocol = $true
+            }
+            @{
+              protocol_absent = -not (Test-Path $protocolKey)
+              removed_owned_protocol = $removedOwnedProtocol
+              boundary = 'Only the handler owned by this disposable portable app is removed.'
+            } | ConvertTo-Json | Set-Content (Join-Path $reports 'protocol-cleanup.json')
+            Remove-Item $extraction -Recurse -Force
+          }
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        if: always()
+        with:
+          name: windows-existing-artifact-native-qa-${{ github.run_id }}
+          path: qa-reports/
+          if-no-files-found: error
+          retention-days: 30
