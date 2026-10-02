@@ -107,12 +107,19 @@ fi
 runtime_packages=(libsecret-1-0)
 while IFS= read -r library; do
   [[ -n "$library" ]] || continue
-  owner="$(dpkg-query -S "$library" 2>/dev/null | head -n 1 | cut -d: -f1 || true)"
-  owner="${owner%%:*}"
+  owner=""
+  resolved_library="$(readlink -f -- "$library" 2>/dev/null || true)"
+  for candidate in "$library" "$resolved_library"; do
+    [[ -n "$candidate" ]] || continue
+    owner="$(dpkg-query -S "$candidate" 2>/dev/null | head -n 1 | sed 's/: .*//' || true)"
+    owner="${owner%%:*}"
+    [[ -n "$owner" ]] && break
+  done
   if [[ -z "$owner" ]]; then
     echo "Cannot map bundled Goose runtime library to an Ubuntu package: $library" >&2
     exit 1
   fi
+  printf 'Goose runtime library %s is provided by %s\n' "$library" "$owner"
   runtime_packages+=("$owner")
 done < <(ldd "$package_goose" | awk '/=> \// {sub(/^.*=> /, ""); sub(/ .*/, ""); print} /^[[:space:]]*\// {print $1}')
 

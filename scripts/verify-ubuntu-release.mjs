@@ -93,10 +93,22 @@ try {
   const dependencies = output(['dpkg-deb', '--field', args.deb, 'Depends']);
   const dependencyNames = new Set(dependencies.split(',').map((item) => item.trim().match(/^([a-z0-9][a-z0-9+.-]*)/)?.[1]).filter(Boolean));
   assert(dependencyNames.has('libsecret-1-0'), 'Debian package must declare Secret Service runtime support');
+  const packageOwner = async (library) => {
+    let resolved;
+    try { resolved = await fs.realpath(library); } catch { /* Try the original path below. */ }
+    for (const candidate of new Set([library, resolved].filter(Boolean))) {
+      try {
+        const owner = output(['dpkg-query', '-S', candidate]).split(String.fromCharCode(10))[0].split(':')[0];
+        if (owner) return owner;
+      } catch { /* Try the canonical path if the linker path is an unowned alias. */ }
+    }
+    return undefined;
+  };
   for (const line of ldd.split(String.fromCharCode(10))) {
     const library = line.match(/=>\s+(\/\S+)/)?.[1] ?? line.match(/^\s*(\/\S+)/)?.[1];
     if (!library) continue;
-    const owner = output(['dpkg-query', '-S', library]).split(String.fromCharCode(10))[0].split(':')[0];
+    const owner = await packageOwner(library);
+    assert(owner, `No Ubuntu package owns Goose runtime library ${library}`);
     assert(dependencyNames.has(owner), `Debian Depends omits Goose runtime package ${owner} (${library})`);
   }
 

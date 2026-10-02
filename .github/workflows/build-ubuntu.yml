@@ -44,6 +44,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: ubuntu-22.04-x64-rc5
+          cache-on-failure: true
 
       - name: Install locked Node workspace
         run: pnpm --dir ui install --frozen-lockfile
