@@ -107,6 +107,7 @@ function childEnvironment() {
   return environment;
 }
 async function start() {
+  if (process.platform === 'win32') report.windows_owned_processes_drained = false;
   const port = await freePort();
   const args = [`--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${port}`, '--disable-gpu'];
   if (options['password-store']) args.push(`--password-store=${options['password-store']}`);
@@ -256,6 +257,21 @@ async function stop() {
     }
   }
   await instance.browser?.close().catch(() => undefined);
+  if (process.platform === 'win32') {
+    const ownedExecutables = [appPath, backendPath].map((filename) => `'${filename.replaceAll("'", "''")}'`).join(', ');
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
+      $ErrorActionPreference = 'Stop'
+      $ownedExecutables = @(${ownedExecutables})
+      for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $remaining = @(Get-Process | Where-Object { $ownedExecutables -contains $_.Path })
+        if ($remaining.Count -eq 0) { exit 0 }
+        $remaining | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 250
+      }
+      throw 'The disposable app or its bundled backend did not exit before cleanup.'
+    `], { stdio: 'pipe', timeout: 15000 });
+    report.windows_owned_processes_drained = true;
+  }
   active = undefined;
 }
 async function readFixtureState() {
@@ -328,11 +344,24 @@ try {
       fixtureDeleted = cleanup.deleted === true;
     } catch { /* Report incomplete fixture cleanup explicitly. */ }
   }
-  await stop();
+  try { await stop(); }
+  catch (error) {
+    report.result = 'failed';
+    report.cleanup_error = String(error.message).replaceAll(fixture, '[fixture]');
+    process.exitCode = 1;
+  }
   report.fixture_cleanup = !fixtureWritten || fixtureDeleted;
   if (!report.fixture_cleanup) { report.result = 'failed'; process.exitCode = 1; }
-  await fs.rm(temporary, { recursive: true, force: true });
-  if (nativeWindowsUserData) await fs.rm(nativeWindowsUserData, { recursive: true, force: true });
+  try {
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+    if (nativeWindowsUserData) await fs.rm(nativeWindowsUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+    report.profile_cleanup = true;
+  } catch (error) {
+    report.result = 'failed';
+    report.profile_cleanup = false;
+    report.cleanup_error ??= String(error.message).replaceAll(fixture, '[fixture]');
+    process.exitCode = 1;
+  }
   report.completed_at = new Date().toISOString();
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');
