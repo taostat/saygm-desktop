@@ -1980,7 +1980,7 @@
     "defaultMessage": "使用 {modelId}"
   },
   "localToolApprovals.description": {
-    "defaultMessage": "Decide when tools on this Mac can act. Set here, stored here."
+    "defaultMessage": "Decide when tools on this {device} can act. Set here, stored here."
   },
   "localToolApprovals.modeGroup": {
     "defaultMessage": "Approval mode"
@@ -1998,7 +1998,7 @@
     "defaultMessage": "Could not change the approval mode. Try again."
   },
   "localToolApprovals.scope": {
-    "defaultMessage": "This Mac"
+    "defaultMessage": "This {device}"
   },
   "localToolApprovals.title": {
     "defaultMessage": "Local tool approvals"

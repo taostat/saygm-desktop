@@ -5,6 +5,7 @@ import { ArrowLeft, ArrowRight, Check, Cloud, Hand, Laptop, Search } from 'lucid
 import { acpReadDefaults, acpRefreshProviderDetails, acpSaveDefaults } from '../../acp/providers';
 import type { ModelInfo } from '../../types/providers';
 import { cn } from '../../utils';
+import { getLocalDeviceName } from '../../utils/localDeviceName';
 import { useModelAndProvider } from '../ModelAndProviderContext';
 import GMAccount from './GMAccount';
 import { SayGMLockup, SayGMMark } from '../SayGMMark';
@@ -108,7 +109,9 @@ function ModelOption({
 }
 
 /** The ink brand panel beside the setup steps. */
-function WelcomeBrandPanel() {
+export function WelcomeBrandPanel() {
+  const localDeviceName = getLocalDeviceName(window.electron.platform);
+
   return (
     <section className="gm-dark relative flex flex-col overflow-hidden bg-[linear-gradient(165deg,#10161a_0%,#0a0e11_60%,#090c0f_100%)] px-8 pb-10 pt-16 sm:px-14 lg:pb-12 lg:pt-[72px]">
       <div
@@ -125,7 +128,7 @@ function WelcomeBrandPanel() {
           <p className="gm-mono-label">SayGM for desktop</p>
           <h1 className="gm-display text-[clamp(2.5rem,4.4vw,3.5rem)] [text-wrap:balance]">
             Say gm to the agent that works on your{' '}
-            <span className="gm-serif text-gm-yellow">Mac.</span>
+            <span className="gm-serif text-gm-yellow">{localDeviceName}.</span>
           </h1>
           <p className="max-w-[40ch] text-base text-text-secondary [text-wrap:pretty]">
             Sign in, pick a model, and work with files and tools on this computer. Inference runs on
@@ -135,7 +138,7 @@ function WelcomeBrandPanel() {
         <ul className="mt-10 grid grid-cols-3 gap-4 border-t border-border-primary pt-5 text-[13px] text-text-secondary">
           <li className="flex flex-col gap-1.5">
             <Laptop className="size-4 text-gm-yellow" aria-hidden="true" />
-            Runs on your Mac
+            Runs on your {localDeviceName}
           </li>
           <li className="flex flex-col gap-1.5">
             <Hand className="size-4 text-gm-yellow" aria-hidden="true" />

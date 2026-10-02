@@ -2,6 +2,7 @@ import type { ReactNode } from 'react';
 import { Cpu, Laptop, Plug } from 'lucide-react';
 import { SayGMMark } from './SayGMMark';
 import { LocalToolApprovalsCard } from './LocalToolApprovalsCard';
+import { getLocalDeviceName } from '../utils/localDeviceName';
 
 function FlowStop({
   icon,
@@ -41,6 +42,8 @@ function FlowConnector() {
 }
 
 export function PrivacyVerificationPanel() {
+  const localDeviceName = getLocalDeviceName(window.electron.platform);
+
   return (
     <section aria-labelledby="privacy-verification-title" className="text-text-primary">
       <p className="gm-mono-label">Privacy &amp; guardrails</p>
@@ -56,7 +59,10 @@ export function PrivacyVerificationPanel() {
         aria-label="Request path"
         className="mt-7 grid grid-cols-1 items-stretch gap-y-2 md:grid-cols-[minmax(0,1fr)_32px_minmax(0,1fr)_32px_minmax(0,1fr)]"
       >
-        <FlowStop icon={<Laptop className="size-4" aria-hidden="true" />} label="This Mac">
+        <FlowStop
+          icon={<Laptop className="size-4" aria-hidden="true" />}
+          label={`This ${localDeviceName}`}
+        >
           Your desktop agent and local tools run on this computer.
         </FlowStop>
         <FlowConnector />

@@ -4,13 +4,14 @@ import { useConfig } from './ConfigContext';
 import { all_goose_modes } from './settings/mode/ModeSelectionItem';
 import PermissionRulesModal from './settings/permission/PermissionRulesModal';
 import { defineMessages, useIntl } from '../i18n';
+import { getLocalDeviceName } from '../utils/localDeviceName';
 
 const i18n = defineMessages({
   title: { id: 'localToolApprovals.title', defaultMessage: 'Local tool approvals' },
-  scope: { id: 'localToolApprovals.scope', defaultMessage: 'This Mac' },
+  scope: { id: 'localToolApprovals.scope', defaultMessage: 'This {device}' },
   description: {
     id: 'localToolApprovals.description',
-    defaultMessage: 'Decide when tools on this Mac can act. Set here, stored here.',
+    defaultMessage: 'Decide when tools on this {device} can act. Set here, stored here.',
   },
   modeGroup: { id: 'localToolApprovals.modeGroup', defaultMessage: 'Approval mode' },
   rulesLabel: { id: 'localToolApprovals.rulesLabel', defaultMessage: 'Per-tool rules' },
@@ -34,6 +35,7 @@ const MODES = [...all_goose_modes].sort(
 /** The local tool approval mode (GOOSE_MODE), kept separate from SayGM key guardrails. */
 export function LocalToolApprovalsCard() {
   const intl = useIntl();
+  const localDeviceName = getLocalDeviceName(window.electron.platform);
   const { config, upsert } = useConfig();
   const [isRulesOpen, setIsRulesOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -63,10 +65,12 @@ export function LocalToolApprovalsCard() {
           {intl.formatMessage(i18n.title)}
         </h2>
         <span className="gm-badge gm-badge--outline gm-badge--mono">
-          {intl.formatMessage(i18n.scope)}
+          {intl.formatMessage(i18n.scope, { device: localDeviceName })}
         </span>
       </div>
-      <p className="text-[13px] text-text-secondary">{intl.formatMessage(i18n.description)}</p>
+      <p className="text-[13px] text-text-secondary">
+        {intl.formatMessage(i18n.description, { device: localDeviceName })}
+      </p>
 
       <fieldset className="flex flex-col gap-1.5">
         <legend className="sr-only">{intl.formatMessage(i18n.modeGroup)}</legend>
