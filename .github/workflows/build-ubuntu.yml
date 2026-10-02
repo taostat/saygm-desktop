@@ -40,7 +40,7 @@ jobs:
             protobuf-compiler pkg-config python3 unzip xvfb xauth \
             dbus-x11 gnome-keyring libsecret-tools
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@v6
         with:
           version: 10.30.3
           run_install: false
