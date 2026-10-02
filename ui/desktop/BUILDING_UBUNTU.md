@@ -1,17 +1,21 @@
 # Building the Ubuntu RC5 package
 
-The private Ubuntu workflow builds the Goose backend and desktop app on a native
-Ubuntu 22.04 x86_64 runner. It creates an amd64 Debian package and a portable ZIP
-for SayGM Desktop 0.1.0-rc.5. The workflow uploads a private Actions artifact; it
-does not publish a public release.
+The private Ubuntu workflow builds the Goose backend and desktop app on native
+Ubuntu 22.04 x64 or arm64 runners. Choose `x64`, `arm64`, or `both` when
+dispatching the workflow. Each target creates an architecture-specific Debian
+package and portable ZIP for SayGM Desktop 0.1.0-rc.5. The workflow uploads a
+private Actions artifact; it does not publish a public release.
 
-For a local build, use Ubuntu 22.04 x86_64 with Rust 1.96.1, Node 24.10.0, and
-pnpm 10.30.3. Install the native packages listed in
+For a local build, use native Ubuntu 22.04 x64 or arm64 with Rust 1.96.1, Node
+24.10.0, and pnpm 10.30.3. Pass the matching architecture to the build script.
+Install the native packages listed in
 `.github/workflows/build-ubuntu.yml`, then run:
 
 ```bash
 pnpm --dir ui install --frozen-lockfile
-scripts/build-ubuntu-release.sh ./artifacts
+scripts/build-ubuntu-release.sh ./artifacts x64
+# Or, on native arm64:
+scripts/build-ubuntu-release.sh ./artifacts arm64
 ```
 
 The build compiles `goose-cli` from the checked out source, stages its binary
@@ -24,6 +28,8 @@ Install the Debian package with:
 
 ```bash
 sudo apt install ./artifacts/SayGM-0.1.0-rc.5-linux-x64.deb
+# For arm64 builds:
+sudo apt install ./artifacts/SayGM-0.1.0-rc.5-linux-arm64.deb
 ```
 
 Linux credentials require an unlocked Secret Service provider such as GNOME
