@@ -22,33 +22,34 @@ def main():
     parser.add_argument("--branch", required=True, help="New local update branch")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    manifest = json.loads((root / "maintenance/upstream.json").read_text())
-    remote_url = git(root, "remote", "get-url", "upstream", check=False)
-    if remote_url.returncode or remote_url.stdout.strip() != manifest["repository"]:
-        parser.error("upstream remote must match maintenance/upstream.json; see maintenance/UPSTREAM.md")
     if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
         parser.error("revision must be a full 40-character commit SHA")
     if git(root, "status", "--porcelain").stdout.strip():
         parser.error("source worktree must be clean; commit scoped changes first")
+    source_revision = git(root, "rev-parse", "HEAD").stdout.strip()
+    manifest = json.loads(git(root, "show", source_revision + ":maintenance/upstream.json").stdout)
+    remote_url = git(root, "remote", "get-url", "upstream", check=False)
+    if remote_url.returncode or remote_url.stdout.strip() != manifest["repository"]:
+        parser.error("upstream remote must match maintenance/upstream.json; see maintenance/UPSTREAM.md")
     if args.worktree.exists():
         parser.error("worktree destination already exists")
     if root == args.worktree.resolve() or root in args.worktree.resolve().parents:
         parser.error("worktree destination must be outside the source checkout")
     base = manifest["integrated_revision"]
-    for ancestor, descendant in ((base, "HEAD"), (base, args.revision)):
+    for ancestor, descendant in ((base, source_revision), (base, args.revision)):
         if git(root, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode:
             parser.error(f"{ancestor} must be an ancestor of {descendant}; check upstream provenance")
     upstream_ref = "refs/remotes/upstream/" + manifest["branch"]
     if git(root, "merge-base", "--is-ancestor", args.revision, upstream_ref, check=False).returncode:
         parser.error("revision is not reachable from fetched upstream/main")
-    if git(root, "merge-base", "--is-ancestor", args.revision, "HEAD", check=False).returncode == 0:
+    if git(root, "merge-base", "--is-ancestor", args.revision, source_revision, check=False).returncode == 0:
         parser.error("revision is already in this branch's ancestry")
     git(root, "check-ref-format", "--branch", args.branch)
-    git(root, "worktree", "add", "-b", args.branch, str(args.worktree.resolve()), "HEAD")
+    git(root, "worktree", "add", "-b", args.branch, str(args.worktree.resolve()), source_revision)
     result = git(args.worktree, "merge", "--no-commit", "--no-ff", args.revision, check=False)
     conflicts = git(args.worktree, "diff", "--name-only", "--diff-filter=U").stdout.splitlines()
     report = {
-        "source_revision": git(root, "rev-parse", "HEAD").stdout.strip(),
+        "source_revision": source_revision,
         "previous_upstream_revision": base,
         "candidate_upstream_revision": args.revision,
         "worktree": str(args.worktree.resolve()),
