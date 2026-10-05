@@ -9,6 +9,7 @@ import { getLocalDeviceName } from '../../utils/localDeviceName';
 import { useModelAndProvider } from '../ModelAndProviderContext';
 import GMAccount from './GMAccount';
 import { SayGMLockup, SayGMMark } from '../SayGMMark';
+import { SAYGM_PRODUCT } from '../../product/saygmProduct';
 
 type SetupStep = 'account' | 'model';
 
@@ -223,7 +224,7 @@ export default function WelcomeSetup({ onComplete }: WelcomeSetupProps) {
         throw new Error('Connect and finish SayGM account setup before choosing a model.');
       }
 
-      const { provider } = await acpRefreshProviderDetails('saygm');
+      const { provider } = await acpRefreshProviderDetails(SAYGM_PRODUCT.providerId);
       if (operationId !== setupOperationId.current) return;
       if (!provider?.is_configured) {
         throw new Error(
@@ -246,7 +247,8 @@ export default function WelcomeSetup({ onComplete }: WelcomeSetupProps) {
       }
 
       const preferredModel =
-        providerId === 'saygm' && availableModels.some((model) => model.name === modelId)
+        providerId === SAYGM_PRODUCT.providerId &&
+        availableModels.some((model) => model.name === modelId)
           ? modelId
           : provider.metadata.default_model;
       setModels(availableModels);
@@ -365,7 +367,7 @@ export default function WelcomeSetup({ onComplete }: WelcomeSetupProps) {
       if (!account.connected || !account.providerConfigured) {
         throw new Error('Your SayGM connection is not ready. Sign in again to continue.');
       }
-      await acpSaveDefaults('saygm', selectedModel);
+      await acpSaveDefaults(SAYGM_PRODUCT.providerId, selectedModel);
       if (operationId !== setupOperationId.current) return;
       await refreshCurrentModelAndProvider();
       if (operationId !== setupOperationId.current) return;
@@ -530,7 +532,7 @@ export default function WelcomeSetup({ onComplete }: WelcomeSetupProps) {
                     Model availability and capabilities can change. See the{' '}
                     <button
                       type="button"
-                      onClick={() => void window.electron.openExternal('https://saygm.com/models')}
+                      onClick={() => void window.electron.openExternal(SAYGM_PRODUCT.modelsUrl)}
                       className="gm-link"
                     >
                       live model catalog

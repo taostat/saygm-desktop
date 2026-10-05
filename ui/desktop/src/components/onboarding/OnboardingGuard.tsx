@@ -3,6 +3,7 @@ import { RotateCw } from 'lucide-react';
 import { acpReadDefaults } from '../../acp/providers';
 import { useConfig } from '../ConfigContext';
 import { SayGMLockup } from '../SayGMMark';
+import { SAYGM_PRODUCT } from '../../product/saygmProduct';
 import WelcomeSetup from './WelcomeSetup';
 
 interface OnboardingGuardProps {
@@ -19,7 +20,7 @@ async function isSayGMConfigured(): Promise<boolean> {
   return (
     account.connected &&
     account.providerConfigured &&
-    defaults.providerId === 'saygm' &&
+    defaults.providerId === SAYGM_PRODUCT.providerId &&
     typeof defaults.modelId === 'string' &&
     !!defaults.modelId.trim()
   );

@@ -17,6 +17,7 @@ import { SwitchModelModal } from '../models/subcomponents/SwitchModelModal';
 import { useModelAndProvider } from '../../ModelAndProviderContext';
 import type { View } from '../../../utils/navigationUtils';
 import { defineMessages, useIntl } from '../../../i18n';
+import { isSaygmProviderId } from '../../../product/saygmProduct';
 
 const i18n = defineMessages({
   addProvider: {
@@ -222,7 +223,7 @@ function ProviderCards({
   const providerCards = useMemo(() => {
     // providers needs to be an array
     const providersArray = Array.isArray(providers)
-      ? providers.filter((provider) => provider.name === 'saygm')
+      ? providers.filter((provider) => isSaygmProviderId(provider.name))
       : [];
     const sortedProviders = [...providersArray].sort(
       (a, b) =>

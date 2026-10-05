@@ -59,6 +59,7 @@ import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-insta
 import { WEB_PROTOCOLS } from './utils/urlSecurity';
 import { openExternalUrl } from './utils/openExternalUrl';
 import { registerGmAccountIpcHandlers } from './utils/gmAccountIpc';
+import { SAYGM_PRODUCT } from './product/saygmProduct';
 import { buildCSP, leaseBackendOrigin, shouldApplyRendererCsp } from './utils/csp';
 import { resolveWorkingDir } from './utils/workingDir';
 import {
@@ -69,11 +70,11 @@ import {
 
 // Keep SayGM's desktop state and Goose runtime config separate from any upstream
 // Goose installation. The child process receives this marker as well.
-app.setName('SayGM');
-const saygmUserDataPath = path.join(app.getPath('appData'), 'SayGM');
+app.setName(SAYGM_PRODUCT.name);
+const saygmUserDataPath = path.join(app.getPath('appData'), SAYGM_PRODUCT.appDataDirectory);
 app.setPath('userData', saygmUserDataPath);
 process.env.SAYGM_DESKTOP = '1';
-process.env.GOOSE_PATH_ROOT = path.join(saygmUserDataPath, 'agent');
+process.env.GOOSE_PATH_ROOT = path.join(saygmUserDataPath, SAYGM_PRODUCT.backendDataDirectory);
 delete process.env.GOOSE_CONFIG_DIR;
 delete process.env.GOOSE_EXTERNAL_BACKEND;
 delete process.env.GOOSE_EXTERNAL_BACKEND_URL;
@@ -411,23 +412,35 @@ if (process.env.ENABLE_PLAYWRIGHT) {
 // In production, register normally
 if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
   // Development mode - force registration
-  console.log('[Main] Development mode: Forcing protocol registration for saygm://');
-  app.setAsDefaultProtocolClient('saygm');
+  console.log(
+    `[Main] Development mode: Forcing protocol registration for ${SAYGM_PRODUCT.protocolScheme}://`
+  );
+  app.setAsDefaultProtocolClient(SAYGM_PRODUCT.protocolScheme);
 
   if (process.platform === 'darwin') {
     try {
       // Reset the default handler to ensure dev version takes precedence
-      spawn('open', ['-a', process.execPath, '--args', '--reset-protocol-handler', 'saygm'], {
-        detached: true,
-        stdio: 'ignore',
-      });
+      spawn(
+        'open',
+        [
+          '-a',
+          process.execPath,
+          '--args',
+          '--reset-protocol-handler',
+          SAYGM_PRODUCT.protocolScheme,
+        ],
+        {
+          detached: true,
+          stdio: 'ignore',
+        }
+      );
     } catch {
       console.warn('[Main] Could not reset protocol handler');
     }
   }
 } else {
   // Production mode - normal registration
-  app.setAsDefaultProtocolClient('saygm');
+  app.setAsDefaultProtocolClient(SAYGM_PRODUCT.protocolScheme);
 }
 
 // Apply single instance lock on Windows and Linux where it's needed for deep links
@@ -441,7 +454,9 @@ if (process.platform !== 'darwin') {
     app.quit();
   } else {
     app.on('second-instance', (_event, commandLine) => {
-      const protocolUrl = commandLine.find((arg) => arg.startsWith('saygm://'));
+      const protocolUrl = commandLine.find((arg) =>
+        arg.startsWith(`${SAYGM_PRODUCT.protocolScheme}://`)
+      );
       if (protocolUrl) {
         const parsedUrl = new URL(protocolUrl);
         // If it's a bot/recipe URL, handle it directly by creating a new window
@@ -510,7 +525,9 @@ if (process.platform !== 'darwin') {
   }
 
   // Handle protocol URLs on Windows and Linux startup
-  const protocolUrl = process.argv.find((arg) => arg.startsWith('saygm://'));
+  const protocolUrl = process.argv.find((arg) =>
+    arg.startsWith(`${SAYGM_PRODUCT.protocolScheme}://`)
+  );
   if (protocolUrl) {
     app.whenReady().then(async () => {
       let parsedUrl: URL;
@@ -567,7 +584,7 @@ function getResumeSessionId(parsedUrl: URL): string | null {
 async function createResumeChatWindow(parsedUrl: URL, dir?: string): Promise<boolean> {
   const resumeSessionId = getResumeSessionId(parsedUrl);
   if (!resumeSessionId) {
-    log.warn('[Main] Ignoring saygm://resume URL without a session id');
+    log.warn(`[Main] Ignoring ${SAYGM_PRODUCT.protocolScheme}://resume URL without a session id`);
     return false;
   }
 
@@ -719,7 +736,7 @@ app.on('open-url', async (_event, url) => {
 app.on('will-finish-launching', () => {
   if (process.platform === 'darwin') {
     app.setAboutPanelOptions({
-      applicationName: 'SayGM',
+      applicationName: SAYGM_PRODUCT.name,
       applicationVersion: app.getVersion(),
     });
   }
@@ -774,7 +791,7 @@ async function handleFileOpen(filePath: string) {
 
     // Show user-friendly error notification
     new Notification({
-      title: 'SayGM',
+      title: SAYGM_PRODUCT.name,
       body: `Could not open directory: ${path.basename(filePath)}`,
     }).show();
   }
@@ -1249,7 +1266,7 @@ const createChat = async (
       log.error('goose serve failed to start', error);
       dialog.showMessageBoxSync({
         type: 'error',
-        title: 'SayGM Failed to Start',
+        title: `${SAYGM_PRODUCT.name} Failed to Start`,
         message: 'The backend server failed to start.',
         detail: [
           'Backend: goose serve',
