@@ -7,6 +7,7 @@ pub mod documents;
 pub mod errors;
 pub mod formats;
 pub mod goose_mode;
+pub mod identity;
 pub mod images;
 pub mod json;
 pub mod maybe_send;

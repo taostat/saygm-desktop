@@ -38,6 +38,7 @@ pub mod permission;
 pub mod plugins;
 #[cfg(feature = "telemetry")]
 pub mod posthog;
+pub(crate) mod product;
 pub mod prompt_template;
 pub mod providers;
 pub mod recipe;

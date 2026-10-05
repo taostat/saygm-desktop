@@ -1,5 +1,7 @@
 use crate::config::paths::Paths;
+use goose_provider_types::identity::SAYGM_IDENTITY;
 use include_dir::{include_dir, Dir};
+use minijinja::value::ObjectRepr;
 use minijinja::{Environment, Error as MiniJinjaError, Value as MJValue};
 use serde::Serialize;
 use std::path::PathBuf;
@@ -9,7 +11,7 @@ static CORE_PROMPTS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/prompts");
 static TEMPLATE_REGISTRY: &[(&str, &str)] = &[
     (
         "system.md",
-        "Main system prompt that defines SayGM's personality and behavior",
+        "Main system prompt that defines the assistant's personality and behavior",
     ),
     (
         "compaction.md",
@@ -25,11 +27,11 @@ static TEMPLATE_REGISTRY: &[(&str, &str)] = &[
     ),
     (
         "apps_create.md",
-        "Prompt for generating new SayGM apps based on the user instructions",
+        "Prompt for generating new apps based on the user instructions",
     ),
     (
         "apps_iterate.md",
-        "Prompt for updating existing SayGM apps based on feedback",
+        "Prompt for updating existing apps based on feedback",
     ),
     (
         "permission_judge.md",
@@ -96,9 +98,21 @@ pub fn render_string<T: Serialize>(
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
     env.add_filter("code_fence", code_fence);
+    env.add_global("product", MJValue::from_serialize(SAYGM_IDENTITY));
     env.add_template("template", template_str)?;
     let tmpl = env.get_template("template")?;
-    let ctx = MJValue::from_serialize(context);
+    let original_context = MJValue::from_serialize(context);
+    let ctx = if original_context
+        .as_object()
+        .is_some_and(|object| object.repr() == ObjectRepr::Map)
+    {
+        minijinja::context! {
+            product => minijinja::context!(name => SAYGM_IDENTITY.name),
+            ..original_context
+        }
+    } else {
+        original_context
+    };
     let rendered = tmpl.render(ctx)?;
     Ok(rendered.trim().to_string())
 }
@@ -241,7 +255,6 @@ mod tests {
 
         let template = template.unwrap();
         assert_eq!(template.name, "system.md");
-        assert!(template.description.contains("SayGM"));
         assert!(!template.description.is_empty());
         assert!(!template.default_content.is_empty());
         assert!(!template.is_customized);
@@ -253,6 +266,40 @@ mod tests {
         let result = render_template("system.md", &context);
         assert!(result.is_ok(), "Should be able to render system.md");
         assert!(!result.unwrap().is_empty());
+    }
+
+    #[test]
+    fn render_string_reserves_product_identity_and_preserves_other_context_fields() {
+        let context = serde_json::json!({
+            "product": {"name": "untrusted"},
+            "value": "kept",
+        });
+
+        let rendered = render_string("{{ product.name }}:{{ value }}", &context).unwrap();
+
+        assert_eq!(rendered, "SayGM:kept");
+    }
+
+    #[test]
+    fn render_string_injects_identity_without_changing_non_map_contexts() {
+        assert_eq!(render_string("{{ this }}", &"scalar").unwrap(), "");
+        assert_eq!(
+            render_string(
+                "{{ this is none }}:{{ product.name }}",
+                &Option::<String>::None
+            )
+            .unwrap(),
+            "False:SayGM"
+        );
+        assert_eq!(
+            render_string(
+                "{% for item in this %}{{ item }}{% endfor %}:{{ product.name }}",
+                &serde_json::json!(["one", "two"])
+            )
+            .unwrap(),
+            ":SayGM"
+        );
+        assert_eq!(render_string("{{ product.name }}", &()).unwrap(), "SayGM");
     }
 
     #[test]
@@ -277,23 +324,33 @@ mod tests {
 
     #[test]
     fn bundled_agent_prompts_use_saygm_identity() {
-        for (name, expected_identity) in [
-            (
-                "system.md",
-                "You are SayGM, a general-purpose AI assistant.",
-            ),
-            (
-                "subagent_system.md",
-                "You are a specialized subagent working with SayGM",
-            ),
-            (
-                "tiny_model_system.md",
-                "You are SayGM, an autonomous AI assistant.",
-            ),
-        ] {
-            let prompt = builtin_content(name).expect("bundled prompt");
-            assert!(prompt.starts_with(expected_identity), "{name}");
-            assert!(!prompt.contains("created by AAIF"), "{name}");
+        fn assert_prompt_identity<T: Serialize>(context: &T) {
+            for (name, expected_identity) in [
+                (
+                    "system.md",
+                    "You are SayGM, a general-purpose AI assistant.",
+                ),
+                (
+                    "subagent_system.md",
+                    "You are a specialized subagent working with SayGM",
+                ),
+                (
+                    "tiny_model_system.md",
+                    "You are SayGM, an autonomous AI assistant.",
+                ),
+            ] {
+                let template = builtin_content(name).expect("bundled prompt");
+                let prompt = render_string(&template, context).expect("bundled prompt renders");
+                assert!(prompt.starts_with(expected_identity), "{name}");
+                assert!(!prompt.contains("created by AAIF"), "{name}");
+            }
         }
+
+        assert_prompt_identity(&Option::<String>::None);
+        assert_prompt_identity(&());
+        assert_prompt_identity(&serde_json::json!(["first", "second"]));
+
+        let empty_context = HashMap::<String, String>::new();
+        assert_prompt_identity(&empty_context);
     }
 }

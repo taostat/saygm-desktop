@@ -50,7 +50,7 @@ pub(crate) fn load_tiny_model_prompt() -> String {
 
     crate::prompt_template::render_template("tiny_model_system.md", &context).unwrap_or_else(|e| {
         tracing::warn!("Failed to load tiny_model_system.md: {:?}", e);
-        crate::prompt_template::TINY_MODEL_SYSTEM_PROMPT_FALLBACK.to_string()
+        crate::prompt_template::tiny_model_system_prompt_fallback()
     })
 }
 

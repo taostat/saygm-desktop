@@ -1,13 +1,19 @@
 use include_dir::{include_dir, Dir};
+use minijinja::value::ObjectRepr;
 use minijinja::{Environment, Error as MiniJinjaError, Value as MJValue};
 use serde::Serialize;
 
 use crate::paths::Paths;
+use goose_provider_types::identity::SAYGM_IDENTITY;
 
 static CORE_PROMPTS_DIR: Dir = include_dir!("$CARGO_MANIFEST_DIR/src/prompts");
 
-pub(crate) const TINY_MODEL_SYSTEM_PROMPT_FALLBACK: &str =
-    "You are SayGM, an AI assistant. You can execute shell commands by starting lines with $.";
+pub(crate) fn tiny_model_system_prompt_fallback() -> String {
+    format!(
+        "You are {}, an AI assistant. You can execute shell commands by starting lines with $.",
+        SAYGM_IDENTITY.name
+    )
+}
 
 pub fn render_string<T: Serialize>(
     template_str: &str,
@@ -16,9 +22,21 @@ pub fn render_string<T: Serialize>(
     let mut env = Environment::new();
     env.set_trim_blocks(true);
     env.set_lstrip_blocks(true);
+    env.add_global("product", MJValue::from_serialize(SAYGM_IDENTITY));
     env.add_template("template", template_str)?;
     let tmpl = env.get_template("template")?;
-    let ctx = MJValue::from_serialize(context);
+    let original_context = MJValue::from_serialize(context);
+    let ctx = if original_context
+        .as_object()
+        .is_some_and(|object| object.repr() == ObjectRepr::Map)
+    {
+        minijinja::context! {
+            product => minijinja::context!(name => SAYGM_IDENTITY.name),
+            ..original_context
+        }
+    } else {
+        original_context
+    };
     let rendered = tmpl.render(ctx)?;
     Ok(rendered.trim().to_string())
 }
@@ -54,9 +72,40 @@ mod tests {
         let file = CORE_PROMPTS_DIR
             .get_file("tiny_model_system.md")
             .expect("bundled tiny-model prompt");
-        let prompt = String::from_utf8_lossy(file.contents());
+        let template = String::from_utf8_lossy(file.contents());
+        let context = serde_json::json!({});
+        let prompt = render_string(&template, &context).unwrap();
 
         assert!(prompt.starts_with("You are SayGM, an autonomous AI assistant."));
-        assert!(TINY_MODEL_SYSTEM_PROMPT_FALLBACK.starts_with("You are SayGM,"));
+        for prompt in [
+            render_string(&template, &Option::<String>::None).unwrap(),
+            render_string(&template, &()).unwrap(),
+            render_string(&template, &serde_json::json!(["first"])).unwrap(),
+        ] {
+            assert!(prompt.starts_with("You are SayGM, an autonomous AI assistant."));
+        }
+        assert_eq!(render_string("{{ this }}", &"scalar").unwrap(), "");
+        assert_eq!(
+            render_string(
+                "{% for item in this %}{{ item }}{% endfor %}",
+                &serde_json::json!(["first"])
+            )
+            .unwrap(),
+            ""
+        );
+        assert!(tiny_model_system_prompt_fallback().starts_with("You are SayGM,"));
+    }
+
+    #[test]
+    fn render_string_reserves_product_identity_and_keeps_other_context() {
+        let context = serde_json::json!({
+            "product": {"name": "untrusted"},
+            "os": "linux",
+        });
+
+        assert_eq!(
+            render_string("{{ product.name }}:{{ os }}", &context).unwrap(),
+            "SayGM:linux"
+        );
     }
 }
