@@ -1,5 +1,15 @@
 # SayGM Desktop release candidates
 
+## Unreleased — upstream maintenance
+
+- Restore the original Goose ancestry while preserving existing private commits and releases.
+- Add an isolated, pinned upstream-update workflow and document the downstream integration boundaries.
+- Reconcile the reviewed Windows and Ubuntu sources into one maintenance branch.
+- Centralise desktop product configuration and separate SayGM styles from the shared stylesheet.
+- Centralise backend prompt identity and desktop storage policy while retaining existing behaviour.
+
+These are source changes. Existing RC5 downloads are unchanged; adopting a newer Goose revision and publishing new platform packages remain separate steps.
+
 ## 0.1.0-rc.5 (internal Apple Silicon preview)
 
 - Refresh guardrail capability and availability messaging in the desktop editor.
