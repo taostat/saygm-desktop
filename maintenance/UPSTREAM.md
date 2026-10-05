@@ -3,6 +3,7 @@
 SayGM uses Goose's Rust workspace, provider interface, ACP connection, and Electron
 desktop. Keep new product behavior in dedicated modules and make the integration
 points in inherited code small. A clean textual merge does not prove compatibility.
+See [the integration map](DOWNSTREAM.md) for the owned modules and review boundaries.
 
 ## History and provenance
 
