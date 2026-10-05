@@ -31,4 +31,6 @@ The backend lives in `crates/`; the desktop lives in `ui/desktop/`. The local en
 Production account API: `https://account.saygm.com/v1`.
 Inference API: `https://api.saygm.com/v1`.
 
+For upstream updates and downstream architecture, see [Maintaining Goose](maintenance/UPSTREAM.md).
+
 Keep internal artifacts and signing credentials in private storage. Release workflows upload internal build artifacts; they do not publish to the public Goose repository.
