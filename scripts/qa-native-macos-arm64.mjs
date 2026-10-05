@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -91,10 +91,11 @@ assert(
 const reportPath = path.resolve(options.report);
 await fs.mkdir(path.dirname(reportPath), { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-native-macos-'));
-const home = path.join(temporary, 'home');
+const runnerHome = path.resolve(process.env.HOME || os.homedir());
 const workingDirectory = path.join(temporary, 'work');
-const userData = path.join(home, 'Library', 'Application Support', 'SayGM');
-await fs.mkdir(home, { recursive: true });
+const expectedUserData = path.join(runnerHome, 'Library', 'Application Support', 'SayGM');
+let userDataDirectory = expectedUserData;
+let runnerProfileOwnedBySmoke = false;
 await fs.mkdir(workingDirectory, { recursive: true });
 
 const report = {
@@ -111,7 +112,7 @@ const report = {
   app_architectures: architectures(appPath),
   backend_architectures: architectures(backendPath),
   boundary:
-    'Disposable GitHub macOS runner; isolated HOME and app data. No login, account/provider credential writes, inference, or payment. Secure-storage availability is observed; persistence is not tested. CDP is bound to loopback for this smoke test only.',
+    'Disposable GitHub macOS runner with its native HOME. The smoke refuses an existing SayGM app-data profile and removes only the profile created by this run. The backend working directory is temporary. No login, SayGM account/provider credential writes, inference, or payment. Secure-storage availability is observed; persistence is not tested. CDP is bound to loopback for this smoke test only.',
   process_cleanup: false,
   events: [],
 };
@@ -177,14 +178,40 @@ const childEnvironment = Object.fromEntries(
     .filter((name) => process.env[name] !== undefined)
     .map((name) => [name, process.env[name]])
 );
-childEnvironment.HOME = home;
-childEnvironment.APPDATA = path.join(home, 'Library', 'Application Support');
-childEnvironment.XDG_CONFIG_HOME = path.join(home, '.config');
 childEnvironment.ELECTRON_ENABLE_LOGGING = '1';
+
+async function ensureRunnerProfileIsAbsent() {
+  let existingProfile = null;
+  try {
+    existingProfile = await fs.lstat(expectedUserData);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  assert.equal(
+    existingProfile,
+    null,
+    'Refusing to launch against a pre-existing SayGM app-data profile on the runner'
+  );
+}
+
+async function removeRunnerProfileCreatedBySmoke() {
+  if (!runnerProfileOwnedBySmoke) return;
+  assert.equal(userDataDirectory, expectedUserData, 'Refusing to remove an unexpected app-data path');
+  let profile;
+  try {
+    profile = await fs.lstat(expectedUserData);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  assert(profile.isDirectory() && !profile.isSymbolicLink(), 'Runner SayGM profile is not a plain directory');
+  await fs.rm(expectedUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+}
 
 let active;
 function sanitizeDiagnostic(value) {
   return String(value)
+    .replaceAll(runnerHome, '[runner-home]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
     .replace(/file:\/\/[^\s"'<>]+/gi, '[local file]')
     .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [redacted]')
@@ -269,10 +296,89 @@ async function captureBackendStartup(instance) {
   }
   return { directory_found: true, attempts };
 }
+function captureMainProcessDiagnostics(instance) {
+  const pid = instance.child.pid;
+  if (!pid) return { attempted: false, reason: 'main PID unavailable' };
+
+  let processState;
+  try {
+    processState = execFileSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,state=,comm='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    }).trim();
+  } catch (error) {
+    processState = sanitizeDiagnostic(error.message);
+  }
+
+  const sampled = spawnSync('/usr/bin/sample', [String(pid), '1', '1'], {
+    encoding: 'utf8',
+    timeout: 8000,
+    maxBuffer: 512 * 1024,
+  });
+  const sampleOutput = [sampled.stdout, sampled.stderr].filter(Boolean).join('\n');
+  const sampleLines = sampleOutput.split(/\r?\n/).filter(Boolean);
+  const sampleSummary = sampleLines.filter((line) =>
+    /^(Analysis of sampling|Process:|Path:|Identifier:|Version:|Code Type:|Parent Process:|Date\/Time:|OS Version:|Report Version:|Call graph:|Thread(?:\s|_)\d+)/.test(
+      line.trimStart()
+    ) || /^\s+(?:\+\s+)?\d+(?:\s|$)/.test(line)
+  );
+  return {
+    attempted: true,
+    process_state: processState.slice(0, 500),
+    sample_exit_status: sampled.status,
+    sample_signal: sampled.signal,
+    sample_error: sampled.error ? sanitizeDiagnostic(sampled.error.message) : null,
+    sample_lines: sampleSummary
+      .slice(0, 100)
+      .map((line) => sanitizeDiagnostic(line)),
+  };
+}
 async function captureRendererFailure(instance) {
   const page = instance.page;
   if (!page || page.isClosed()) return { page_available: false };
   const captured = { page_available: true, screenshot_captured: false };
+
+  try {
+    const config = await withTimeout(
+      page.evaluate(() => {
+        const value = window.electron.getConfig();
+        return {
+          external_backend: Boolean(value?.GOOSE_EXTERNAL_BACKEND),
+          path_root: typeof value?.GOOSE_PATH_ROOT === 'string' ? value.GOOSE_PATH_ROOT : null,
+        };
+      }),
+      3000,
+      'failure preload config'
+    );
+    const resolvedPathRoot = config.path_root ? path.resolve(config.path_root) : null;
+    const configuredUserData = resolvedPathRoot ? path.dirname(resolvedPathRoot) : null;
+    const pathRootUnderRunnerHome = Boolean(
+      resolvedPathRoot && resolvedPathRoot.startsWith(`${runnerHome}${path.sep}`)
+    );
+    const pathRootMatchesExpected = resolvedPathRoot === path.join(expectedUserData, 'agent');
+    if (pathRootUnderRunnerHome && pathRootMatchesExpected) {
+      userDataDirectory = configuredUserData;
+      instance.userDataDirectory = configuredUserData;
+    }
+    captured.preload_config = {
+      state: 'resolved',
+      external_backend: config.external_backend,
+      path_root_present: Boolean(resolvedPathRoot),
+      path_root_under_runner_home: pathRootUnderRunnerHome,
+      path_root_matches_expected_agent_directory: pathRootMatchesExpected,
+      app_data_relative_to_runner_home: pathRootUnderRunnerHome
+        ? path.relative(runnerHome, configuredUserData)
+        : null,
+    };
+  } catch (error) {
+    captured.preload_config = {
+      state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+      error: sanitizeDiagnostic(error.message),
+    };
+  }
+
+  captured.main_process_diagnostics = captureMainProcessDiagnostics(instance);
+
   try {
     await withTimeout(
       page.screenshot({ path: report.screenshot_path, timeout: 5000 }),
@@ -330,77 +436,157 @@ async function captureRendererFailure(instance) {
   } catch (error) {
     captured.page_snapshot_error = sanitizeDiagnostic(error.message);
   }
-  try {
-    captured.ipc = await withTimeout(
-      page.evaluate(async () => {
-        async function probe(operation, project) {
-          let timer;
-          try {
-            return await Promise.race([
-              Promise.resolve()
-                .then(operation)
-                .then(
-                  (value) => ({ state: 'resolved', value: project(value) }),
-                  (error) => ({ state: 'rejected', error: String(error) })
-                ),
-              new Promise((resolve) => {
-                timer = setTimeout(() => resolve({ state: 'timeout' }), 3000);
-              }),
-            ]);
-          } finally {
-            clearTimeout(timer);
-          }
+  captured.ipc = {};
+  let loopbackAcpUrl = null;
+  const probes = [
+    [
+      'account_status',
+      () => page.evaluate(() => window.electron.gmAccount.getStatus()),
+      (value) => ({
+        connected: Boolean(value?.connected),
+        provider_configured: Boolean(value?.providerConfigured),
+        secure_storage_available: Boolean(value?.secureStorageAvailable),
+      }),
+    ],
+    [
+      'acp_url',
+      () => page.evaluate(() => window.electron.getAcpUrl()),
+      (value) => {
+        if (typeof value !== 'string') return { available: false };
+        try {
+          const endpoint = new URL(value);
+          const loopback = endpoint.protocol === 'wss:' && endpoint.hostname === '127.0.0.1';
+          if (loopback) loopbackAcpUrl = value;
+          return {
+            available: true,
+            protocol: endpoint.protocol,
+            loopback,
+            port_present: Boolean(endpoint.port),
+          };
+        } catch {
+          return { available: false, invalid: true };
         }
-        const api = window.electron;
-        const config = await probe(
-          () => api.getConfig(),
-          (value) => ({
-            external_backend: Boolean(value?.GOOSE_EXTERNAL_BACKEND),
-            path_root_present: typeof value?.GOOSE_PATH_ROOT === 'string' && Boolean(value.GOOSE_PATH_ROOT),
-          })
-        );
-        const account_status = await probe(
-          () => api.gmAccount.getStatus(),
-          (value) => ({
-            connected: Boolean(value?.connected),
-            provider_configured: Boolean(value?.providerConfigured),
-            secure_storage_available: Boolean(value?.secureStorageAvailable),
-          })
-        );
-        const acp_url = await probe(
-          () => api.getAcpUrl(),
-          (value) => {
-            if (typeof value !== 'string') return { available: false };
+      },
+    ],
+  ];
+  for (const [name, operation, project] of probes) {
+    const startedAt = Date.now();
+    try {
+      const value = await withTimeout(operation(), 4000, `failure ${name} IPC`);
+      captured.ipc[name] = {
+        state: 'resolved',
+        elapsed_ms: Date.now() - startedAt,
+        value: project(value),
+      };
+    } catch (error) {
+      captured.ipc[name] = {
+        state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+        elapsed_ms: Date.now() - startedAt,
+        error: sanitizeDiagnostic(error.message),
+      };
+    }
+  }
+  if (!loopbackAcpUrl) {
+    captured.local_acp_probe = { state: 'skipped', reason: 'local loopback ACP URL unavailable' };
+  } else {
+    try {
+      captured.local_acp_probe = await withTimeout(
+        page.evaluate(async (url) => {
+          const socket = new WebSocket(url);
+          const pending = new Map();
+          let sequence = 0;
+          socket.addEventListener('message', (event) => {
+            let response;
             try {
-              const endpoint = new URL(value);
-              return {
-                available: true,
-                protocol: endpoint.protocol,
-                host: endpoint.hostname,
-                port_present: Boolean(endpoint.port),
-              };
+              response = JSON.parse(event.data);
             } catch {
-              return { available: false, invalid: true };
+              return;
+            }
+            if (response.id !== undefined && pending.has(response.id)) {
+              const callbacks = pending.get(response.id);
+              pending.delete(response.id);
+              clearTimeout(callbacks.timeout);
+              response.error
+                ? callbacks.reject(new Error(`ACP request failed: ${response.error.code}`))
+                : callbacks.resolve(response.result);
+            } else if (response.method && response.id !== undefined) {
+              socket.send(JSON.stringify({
+                jsonrpc: '2.0',
+                id: response.id,
+                error: { code: -32601, message: 'Diagnostic client does not handle interactive requests' },
+              }));
+            }
+          });
+          const request = (method, params) => {
+            const id = ++sequence;
+            return new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error(`ACP request timeout: ${method}`));
+              }, 7000);
+              pending.set(id, { resolve, reject, timeout });
+              socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+            });
+          };
+          try {
+            await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error('ACP socket open timed out')), 7000);
+              socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+              socket.addEventListener('error', () => {
+                clearTimeout(timeout);
+                reject(new Error('Local ACP socket failed to open'));
+              }, { once: true });
+            });
+            const initialized = await request('initialize', {
+              protocolVersion: 1,
+              clientCapabilities: {},
+              clientInfo: { name: 'SayGM macOS diagnostic', version: '1' },
+            });
+            const providers = await request('_goose/unstable/providers/list', {});
+            return {
+              state: 'resolved',
+              protocol_version: initialized?.protocolVersion ?? null,
+              provider_ids: Array.isArray(providers?.entries)
+                ? providers.entries.map((entry) => entry.providerId).filter((value) => typeof value === 'string')
+                : [],
+            };
+          } finally {
+            for (const callbacks of pending.values()) clearTimeout(callbacks.timeout);
+            pending.clear();
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+              socket.close();
             }
           }
-        );
-        return { config, account_status, acp_url };
-      }),
-      10000,
-      'failure IPC probes'
-    );
-  } catch (error) {
-    captured.ipc_probe_error = sanitizeDiagnostic(error.message);
+        }, loopbackAcpUrl),
+        18000,
+        'failure local ACP probe'
+      );
+    } catch (error) {
+      captured.local_acp_probe = {
+        state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+        error: sanitizeDiagnostic(error.message),
+      };
+    }
   }
   return captured;
 }
 async function start() {
+  await setPhase('verify-runner-profile-is-absent');
+  await ensureRunnerProfileIsAbsent();
+  await note('Runner-native SayGM app-data profile was absent before launch');
   await setPhase('reserve-loopback-debug-port');
   const port = await freePort();
-  await setPhase('launch-packaged-app-with-isolated-home');
+  await setPhase('launch-packaged-app-with-native-home');
+  runnerProfileOwnedBySmoke = true;
   const child = spawn(
     appPath,
-    ['--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`, '--disable-gpu'],
+    [
+      '--dir',
+      workingDirectory,
+      '--remote-debugging-address=127.0.0.1',
+      `--remote-debugging-port=${port}`,
+      '--disable-gpu',
+    ],
     {
       cwd: workingDirectory,
       env: childEnvironment,
@@ -414,7 +600,7 @@ async function start() {
     page: null,
     pages: [],
     observedPages: new Set(),
-    userDataDirectory: userData,
+    userDataDirectory,
     rendererDiagnostics: {
       console: [],
       pageErrors: [],
@@ -515,7 +701,7 @@ async function start() {
   assert.equal(details.platform, 'darwin');
   assert.equal(details.arch, 'arm64');
   assert.equal(details.version, '0.1.0-rc.5');
-  assert.equal(path.resolve(details.config.GOOSE_PATH_ROOT), path.join(userData, 'agent'));
+  assert.equal(path.resolve(details.config.GOOSE_PATH_ROOT), path.join(userDataDirectory, 'agent'));
   assert.equal(details.config.GOOSE_EXTERNAL_BACKEND, false, 'Smoke test must use the packaged local backend');
   await setPhase('read-fresh-account-status');
   const status = await withTimeout(instance.page.evaluate(() => window.electron.gmAccount.getStatus()), 10000, 'account status IPC');
@@ -523,7 +709,7 @@ async function start() {
   report.secure_storage_available = Boolean(status.secureStorageAvailable);
   await setPhase('read-local-acp-endpoint');
   const acpUrl = await withTimeout(instance.page.evaluate(() => window.electron.getAcpUrl()), 10000, 'local ACP endpoint IPC');
-  const startupDirectory = path.join(userData, 'logs', 'startup');
+  const startupDirectory = path.join(userDataDirectory, 'logs', 'startup');
   const startupFiles = (await fs.readdir(startupDirectory))
     .filter((name) => name.startsWith('goose-serve-startup-') && name.endsWith('.json'))
     .sort();
@@ -733,6 +919,11 @@ try {
     }
     report.renderer_diagnostics = active.rendererDiagnostics;
     report.backend_startup_snapshot = await captureBackendStartup(active);
+    const latestBackendPid = report.backend_startup_snapshot.attempts
+      ?.slice()
+      .reverse()
+      .find((attempt) => Number.isInteger(attempt.pid) && attempt.pid > 0)?.pid;
+    if (latestBackendPid) active.backendPid = latestBackendPid;
     if (active.carry && /error|warn|failed|exception|panic|ready|health|startup|secure.?storage|keychain/i.test(active.carry)) {
       active.diagnosticLines.push(sanitizeDiagnostic(active.carry));
     }
@@ -752,6 +943,7 @@ try {
   }
   if (report.process_cleanup) {
     try {
+      await removeRunnerProfileCreatedBySmoke();
       await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
       report.profile_cleanup = true;
     } catch (error) {
