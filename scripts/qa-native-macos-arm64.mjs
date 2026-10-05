@@ -99,7 +99,8 @@ const report = {
   app_architectures: architectures(appPath),
   backend_architectures: architectures(backendPath),
   boundary:
-    'Disposable GitHub macOS runner; isolated HOME and app data. No login, customer credentials, inference, payment, or credential-store writes. CDP is bound to loopback for this smoke test only.',
+    'Disposable GitHub macOS runner; isolated HOME and app data. No login, account/provider credential writes, inference, or payment. Secure-storage availability is observed; persistence is not tested. CDP is bound to loopback for this smoke test only.',
+  process_cleanup: false,
   events: [],
 };
 const delay = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
@@ -156,7 +157,7 @@ async function start() {
       stdio: ['ignore', 'pipe', 'pipe'],
     }
   );
-  const instance = { child, browser: null, page: null, lastLog: '' };
+  const instance = { child, browser: null, page: null, backendPid: null, lastLog: '' };
   active = instance;
   for (const stream of [child.stdout, child.stderr]) {
     stream.on('data', (chunk) => {
@@ -236,11 +237,18 @@ async function start() {
     'App must launch its packaged backend'
   );
   assert(Number.isInteger(startup.pid) && startup.pid > 0 && startup.healthCheckSucceeded);
+  instance.backendPid = startup.pid;
   const endpoint = new URL(details.acpUrl);
   assert.equal(endpoint.protocol, 'wss:');
   assert.equal(endpoint.hostname, '127.0.0.1');
   assert(/^\d+$/.test(endpoint.port));
   assert(Number(endpoint.port) > 0 && Number(endpoint.port) <= 65535);
+  assert.equal(details.status.connected, false, 'Fresh profile must not contain a SayGM account');
+  assert.equal(
+    details.config.GOOSE_EXTERNAL_BACKEND,
+    false,
+    'Smoke test must use the packaged local backend'
+  );
   report.secure_storage_available = Boolean(details.status.secureStorageAvailable);
   await note('Packaged renderer/preload, isolated profile, and local TLS backend are live', {
     version: details.version,
@@ -331,7 +339,10 @@ async function start() {
 
 async function stop() {
   const instance = active;
-  if (!instance) return;
+  if (!instance) {
+    report.process_cleanup = true;
+    return;
+  }
   try {
     await instance.page?.evaluate(() => {
       window.__qaAcp?.close();
@@ -341,20 +352,60 @@ async function stop() {
     // Window close can end CDP before its acknowledgement.
   }
   await delay(1200);
-  if (instance.child.exitCode === null && instance.child.pid) {
+  const appPid = instance.child.pid;
+  assert(appPid, 'Packaged app must have a process id');
+  const pidIsAlive = (pid) => {
+    if (!pid) return false;
     try {
-      process.kill(-instance.child.pid, 'SIGTERM');
-    } catch {
-      /* Already exited. */
+      process.kill(pid, 0);
+      return true;
+    } catch (error) {
+      if (error.code === 'ESRCH') return false;
+      if (error.code === 'EPERM') return true;
+      throw error;
     }
-    await delay(300);
+  };
+  const groupIsAlive = (processGroupId) => {
     try {
-      process.kill(-instance.child.pid, 'SIGKILL');
-    } catch {
-      /* Already exited. */
+      process.kill(-processGroupId, 0);
+      return true;
+    } catch (error) {
+      if (error.code === 'ESRCH') return false;
+      if (error.code === 'EPERM') return true;
+      throw error;
     }
+  };
+  try {
+    process.kill(-appPid, 'SIGTERM');
+  } catch (error) {
+    if (error.code !== 'ESRCH') throw error;
+  }
+  const stillRunning = () =>
+    pidIsAlive(appPid) || pidIsAlive(instance.backendPid) || groupIsAlive(appPid);
+  const deadline = Date.now() + 10000;
+  while (Date.now() < deadline && stillRunning()) await delay(250);
+  if (stillRunning()) {
+    try {
+      process.kill(-appPid, 'SIGKILL');
+    } catch (error) {
+      if (error.code !== 'ESRCH') throw error;
+    }
+    if (pidIsAlive(instance.backendPid)) {
+      try {
+        process.kill(instance.backendPid, 'SIGKILL');
+      } catch (error) {
+        if (error.code !== 'ESRCH') throw error;
+      }
+    }
+    const killDeadline = Date.now() + 5000;
+    while (Date.now() < killDeadline && stillRunning()) await delay(250);
   }
   await instance.browser?.close().catch(() => undefined);
+  assert(!pidIsAlive(appPid), 'Packaged app process did not exit');
+  assert(!pidIsAlive(instance.backendPid), 'Packaged backend process did not exit');
+  assert(!groupIsAlive(appPid), 'Packaged app process group did not drain');
+  report.process_cleanup = true;
+  report.process_ids = { app: appPid, backend: instance.backendPid };
   active = undefined;
 }
 
@@ -375,13 +426,21 @@ try {
     report.cleanup_error = String(error.message);
     process.exitCode = 1;
   }
-  try {
-    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
-    report.profile_cleanup = true;
-  } catch (error) {
+  if (report.process_cleanup) {
+    try {
+      await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+      report.profile_cleanup = true;
+    } catch (error) {
+      report.result = 'failed';
+      report.profile_cleanup = false;
+      report.cleanup_error ??= String(error.message);
+      process.exitCode = 1;
+    }
+  } else {
     report.result = 'failed';
     report.profile_cleanup = false;
-    report.cleanup_error ??= String(error.message);
+    report.cleanup_error ??=
+      'Temporary profile retained because app/backend process cleanup failed.';
     process.exitCode = 1;
   }
   report.completed_at = new Date().toISOString();
