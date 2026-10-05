@@ -22,15 +22,15 @@ def main():
     parser.add_argument("--branch", required=True, help="New local update branch")
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
-    manifest = json.loads((root / "maintenance/upstream.json").read_text())
-    remote_url = git(root, "remote", "get-url", "upstream", check=False)
-    if remote_url.returncode or remote_url.stdout.strip() != manifest["repository"]:
-        parser.error("upstream remote must match maintenance/upstream.json; see maintenance/UPSTREAM.md")
     if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
         parser.error("revision must be a full 40-character commit SHA")
     if git(root, "status", "--porcelain").stdout.strip():
         parser.error("source worktree must be clean; commit scoped changes first")
     source_revision = git(root, "rev-parse", "HEAD").stdout.strip()
+    manifest = json.loads(git(root, "show", source_revision + ":maintenance/upstream.json").stdout)
+    remote_url = git(root, "remote", "get-url", "upstream", check=False)
+    if remote_url.returncode or remote_url.stdout.strip() != manifest["repository"]:
+        parser.error("upstream remote must match maintenance/upstream.json; see maintenance/UPSTREAM.md")
     if args.worktree.exists():
         parser.error("worktree destination already exists")
     if root == args.worktree.resolve() or root in args.worktree.resolve().parents:
