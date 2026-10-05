@@ -41,7 +41,7 @@ impl ProductPolicy {
         self.is_saygm_desktop()
     }
 
-    pub(crate) const fn keyring_service<'a>(self, standard_service: &'a str) -> &'a str {
+    pub(crate) const fn keyring_service(self, standard_service: &str) -> &str {
         if self.is_saygm_desktop() {
             SAYGM_KEYRING_SERVICE
         } else {
