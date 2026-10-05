@@ -1,0 +1,153 @@
+name: Build SayGM Desktop for macOS ARM64
+
+on:
+  push:
+    branches:
+      - maintenance/macos-arm64-validation
+      - maintenance/rehearsal-validated
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saygm-desktop-macos-arm64-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos-arm64:
+    name: Native Apple Silicon package and startup smoke
+    runs-on: macos-15
+    timeout-minutes: 240
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify native Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          printf 'runner_arch=%s\n' "$(uname -m)"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.30.3
+
+      - name: Set up native Apple Silicon Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.96.1 --profile default --target aarch64-apple-darwin
+          rustup default 1.96.1
+          rustup target add aarch64-apple-darwin
+          rustc -vV
+          cargo --version
+
+      - name: Verify native Node and Rust toolchains
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(node -p 'process.arch')" = arm64
+          rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
+          printf 'node_arch=%s\n' "$(node -p 'process.arch')"
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: saygm-desktop-macos-arm64-default
+          cache-on-failure: true
+
+      - name: Install locked desktop dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck desktop sources
+        working-directory: ui/desktop
+        run: pnpm run typecheck
+
+      - name: Run desktop unit suite
+        working-directory: ui/desktop
+        run: pnpm run test:run
+
+      - name: Build Goose backend with shipping defaults
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target aarch64-apple-darwin -p goose-cli --bin goose
+          target/aarch64-apple-darwin/release/goose --version
+          mkdir -p ui/desktop/src/bin
+          cp target/aarch64-apple-darwin/release/goose ui/desktop/src/bin/goose
+          chmod 755 ui/desktop/src/bin/goose
+          test "$(lipo -archs target/aarch64-apple-darwin/release/goose)" = arm64
+          shasum -a 256 target/aarch64-apple-darwin/release/goose ui/desktop/src/bin/goose
+
+      - name: Package native arm64 app and portable ZIP
+        working-directory: ui/desktop
+        env:
+          SAYGM_BUNDLE_NAME: SayGM
+          ELECTRON_ARCH: arm64
+        run: pnpm run bundle:default
+
+      - name: Verify packaged app and run isolated native smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/MacOS/SayGM"
+          backend="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/Resources/bin/goose"
+          report="ui/desktop/out/qa/qa-native-macos-arm64.json"
+          test -x "$app"
+          test -x "$backend"
+          node scripts/qa-native-macos-arm64.mjs \
+            --app "$app" \
+            --backend "$backend" \
+            --source-backend target/aarch64-apple-darwin/release/goose \
+            --report "$report"
+          test -f ui/desktop/out/SayGM-darwin-arm64/SayGM.zip
+          node - "$report" ui/desktop/out/SayGM-darwin-arm64/SayGM.zip <<'NODE'
+          const fs = require('node:fs');
+          const { createHash } = require('node:crypto');
+          const { execFileSync } = require('node:child_process');
+          const [reportPath, archivePath] = process.argv.slice(2);
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          const provenance = {
+            source_revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+            workflow_run_id: process.env.GITHUB_RUN_ID,
+            workflow_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            runner_os: process.env.RUNNER_OS,
+            runner_arch: process.env.RUNNER_ARCH,
+            machine_arch: execFileSync('uname', ['-m'], { encoding: 'utf8' }).trim(),
+            rust_host: execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).split('\n').find((line) => line.startsWith('host: '))?.slice(6),
+            node_version: process.version,
+            pnpm_version: execFileSync('pnpm', ['--version'], { encoding: 'utf8' }).trim(),
+            cargo_command: 'cargo build --locked --release --target aarch64-apple-darwin -p goose-cli --bin goose',
+            app_sha256: report.app_sha256,
+            backend_sha256: report.backend_sha256,
+            source_backend_sha256: report.source_backend_sha256,
+            app_architectures: report.app_architectures,
+            backend_architectures: report.backend_architectures,
+            app_asar_sha256: report.asar_sha256,
+            package_sha256: createHash('sha256').update(fs.readFileSync(archivePath)).digest('hex'),
+            native_smoke: report.result,
+            smoke_report: reportPath,
+            artifact_boundary: 'Private unsigned CI artifact for validation; no signing, notarization, or public release.',
+          };
+          fs.writeFileSync('ui/desktop/out/qa/artifact-provenance.json', `${JSON.stringify(provenance, null, 2)}\n`);
+          NODE
+
+      - name: Upload private macOS validation artifact
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-macos-arm64-0.1.0-rc.5-${{ github.sha }}
+          path: |
+            ui/desktop/out/SayGM-darwin-arm64/SayGM.zip
+            ui/desktop/out/qa/qa-native-macos-arm64.json
+            ui/desktop/out/qa/qa-native-macos-arm64.png
+            ui/desktop/out/qa/artifact-provenance.json
+          if-no-files-found: warn
+          retention-days: 7
