@@ -23,6 +23,9 @@ def main():
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[1]
     manifest = json.loads((root / "maintenance/upstream.json").read_text())
+    remote_url = git(root, "remote", "get-url", "upstream", check=False)
+    if remote_url.returncode or remote_url.stdout.strip() != manifest["repository"]:
+        parser.error("upstream remote must match maintenance/upstream.json; see maintenance/UPSTREAM.md")
     if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
         parser.error("revision must be a full 40-character commit SHA")
     if git(root, "status", "--porcelain").stdout.strip():
