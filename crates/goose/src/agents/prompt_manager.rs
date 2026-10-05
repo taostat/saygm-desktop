@@ -12,6 +12,7 @@ use crate::{
     prompt_template,
     utils::sanitize_unicode_tags,
 };
+use goose_provider_types::identity::SAYGM_IDENTITY;
 use std::path::Path;
 
 pub struct PromptManager {
@@ -21,10 +22,13 @@ pub struct PromptManager {
     subdirectory_hint_tracker: SubdirectoryHintTracker,
 }
 
-const SYSTEM_PROMPT_FALLBACK: &str = "You are SayGM, a general-purpose AI assistant.";
-
 fn system_prompt_or_fallback(prompt: Result<String, minijinja::Error>) -> String {
-    prompt.unwrap_or_else(|_| SYSTEM_PROMPT_FALLBACK.to_string())
+    prompt.unwrap_or_else(|_| {
+        format!(
+            "You are {}, a general-purpose AI assistant.",
+            SAYGM_IDENTITY.name
+        )
+    })
 }
 
 impl Default for PromptManager {

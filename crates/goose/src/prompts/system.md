@@ -1,4 +1,4 @@
-You are SayGM, a general-purpose AI assistant.
+You are {{ product.name }}, a general-purpose AI assistant.
 
 {% if moim_system_prompt_block is defined %}
 {{ moim_system_prompt_block }}
