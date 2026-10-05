@@ -20,9 +20,13 @@ for (let index = 2; index < process.argv.length; index += 2) {
   );
   options[process.argv[index].slice(2)] = process.argv[index + 1];
 }
-for (const required of ['app', 'backend', 'source-backend', 'report']) {
+for (const required of ['app', 'backend', 'report']) {
   assert(options[required], `Missing --${required}`);
 }
+assert(
+  options['source-backend'] || options['expected-backend-sha256'],
+  'Provide --source-backend or --expected-backend-sha256'
+);
 assert.equal(process.platform, 'darwin', 'This smoke test must run on macOS');
 assert.equal(process.arch, 'arm64', 'This smoke test must run on native Apple Silicon');
 assert.equal(
@@ -33,15 +37,21 @@ assert.equal(
 
 const appPath = await fs.realpath(path.resolve(options.app));
 const backendPath = await fs.realpath(path.resolve(options.backend));
-const sourceBackendPath = await fs.realpath(path.resolve(options['source-backend']));
+const sourceBackendPath = options['source-backend']
+  ? await fs.realpath(path.resolve(options['source-backend']))
+  : null;
 const appBytes = await fs.readFile(appPath);
 const backendBytes = await fs.readFile(backendPath);
-const sourceBackendBytes = await fs.readFile(sourceBackendPath);
+const sourceBackendBytes = sourceBackendPath ? await fs.readFile(sourceBackendPath) : null;
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const backendSha256 = sha256(backendBytes);
+const sourceBackendSha256 = sourceBackendBytes ? sha256(sourceBackendBytes) : null;
 assert.equal(
-  sha256(backendBytes),
-  sha256(sourceBackendBytes),
-  'Packaged backend must match the built source binary'
+  backendSha256,
+  sourceBackendSha256 ?? options['expected-backend-sha256'],
+  sourceBackendPath
+    ? 'Packaged backend must match the built source binary'
+    : 'Packaged backend must match the pinned native-build artifact hash'
 );
 
 function architectures(filename) {
@@ -93,8 +103,10 @@ const report = {
   architecture: process.arch,
   expected_architecture: 'arm64',
   app_sha256: sha256(appBytes),
-  backend_sha256: sha256(backendBytes),
-  source_backend_sha256: sha256(sourceBackendBytes),
+  backend_sha256: backendSha256,
+  source_backend_sha256: sourceBackendSha256,
+  expected_backend_sha256: sourceBackendPath ? null : options['expected-backend-sha256'],
+  backend_comparison_source: sourceBackendPath ? 'native-build-output' : 'pinned-native-artifact',
   asar_sha256: sha256(await fs.readFile(archivePath)),
   app_architectures: architectures(appPath),
   backend_architectures: architectures(backendPath),
@@ -174,9 +186,213 @@ let active;
 function sanitizeDiagnostic(value) {
   return String(value)
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
+    .replace(/file:\/\/[^\s"'<>]+/gi, '[local file]')
     .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [redacted]')
     .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\b\s*[:=]\s*[^\s,;"']+/gi, '$1=[redacted]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
     .slice(0, 500);
+}
+function appendDiagnostic(entries, detail, maximum = 30) {
+  entries.push(detail);
+  if (entries.length > maximum) entries.splice(0, entries.length - maximum);
+}
+function resourceName(rawUrl) {
+  try {
+    return path.basename(decodeURIComponent(new URL(rawUrl).pathname)).slice(0, 160) || '[root]';
+  } catch {
+    return '[unknown]';
+  }
+}
+function observePage(page, instance) {
+  if (instance.observedPages.has(page)) return;
+  instance.observedPages.add(page);
+  instance.pages.push(page);
+  page.on('console', (message) => {
+    if (message.type() !== 'error' && message.type() !== 'warning') return;
+    appendDiagnostic(instance.rendererDiagnostics.console, {
+      type: message.type(),
+      text: sanitizeDiagnostic(message.text()),
+    });
+  });
+  page.on('pageerror', (error) => {
+    appendDiagnostic(
+      instance.rendererDiagnostics.pageErrors,
+      sanitizeDiagnostic(error.stack ?? error.message)
+    );
+  });
+  page.on('requestfailed', (request) => {
+    appendDiagnostic(instance.rendererDiagnostics.failedRequests, {
+      resource: resourceName(request.url()),
+      resource_type: request.resourceType(),
+      error: sanitizeDiagnostic(request.failure()?.errorText ?? 'unknown request failure'),
+    });
+  });
+  page.on('response', (response) => {
+    if (response.status() < 400 || response.request().resourceType() !== 'script') return;
+    appendDiagnostic(instance.rendererDiagnostics.failedScriptResponses, {
+      resource: resourceName(response.url()),
+      status: response.status(),
+    });
+  });
+}
+async function captureBackendStartup(instance) {
+  const diagnosticsDirectory = path.join(instance.userDataDirectory, 'logs', 'startup');
+  let names;
+  try {
+    names = (await fs.readdir(diagnosticsDirectory))
+      .filter((name) => name.startsWith('goose-serve-startup-') && name.endsWith('.json'))
+      .sort();
+  } catch {
+    return { directory_found: false, attempts: [] };
+  }
+  const attempts = [];
+  for (const name of names.slice(-5)) {
+    try {
+      const startup = JSON.parse(await fs.readFile(path.join(diagnosticsDirectory, name), 'utf8'));
+      attempts.push({
+        file: name,
+        binary_name: startup.binaryPath ? path.basename(startup.binaryPath) : null,
+        pid: startup.pid,
+        health_check_succeeded: startup.healthCheckSucceeded,
+        child_exit_code: startup.childExitCode,
+        child_exit_signal: startup.childExitSignal,
+        events: (startup.events ?? []).slice(-20).map((event) => ({
+          name: sanitizeDiagnostic(event.name),
+          elapsed_ms: event.elapsedMs,
+          at: event.at,
+        })),
+        stderr_tail: (startup.stderrTail ?? []).slice(-8).map(sanitizeDiagnostic),
+      });
+    } catch (error) {
+      attempts.push({ file: name, read_error: sanitizeDiagnostic(error.message) });
+    }
+  }
+  return { directory_found: true, attempts };
+}
+async function captureRendererFailure(instance) {
+  const page = instance.page;
+  if (!page || page.isClosed()) return { page_available: false };
+  const captured = { page_available: true, screenshot_captured: false };
+  try {
+    await withTimeout(
+      page.screenshot({ path: report.screenshot_path, timeout: 5000 }),
+      6000,
+      'failure screenshot'
+    );
+    captured.screenshot_captured = true;
+  } catch (error) {
+    captured.screenshot_error = sanitizeDiagnostic(error.message);
+  }
+  try {
+    captured.page = await withTimeout(
+      page.evaluate(() => {
+        const safeAssetName = (value) => {
+          try {
+            return new URL(value, location.href).pathname.split('/').filter(Boolean).at(-1) ?? '[root]';
+          } catch {
+            return '[unknown]';
+          }
+        };
+        const visible = (element) => element.getClientRects().length > 0;
+        const root = document.getElementById('root');
+        const resources = performance.getEntriesByType('resource').slice(-30);
+        return {
+          title: document.title,
+          ready_state: document.readyState,
+          page_name: safeAssetName(location.href),
+          body_text: document.body?.innerText.replace(/\s+/g, ' ').trim().slice(0, 1800) ?? '',
+          visible_headings: Array.from(document.querySelectorAll('h1, h2, h3'))
+            .filter(visible)
+            .map((heading) => heading.innerText.trim().slice(0, 160))
+            .slice(0, 20),
+          visible_status_text: Array.from(document.querySelectorAll('[role="status"]'))
+            .filter(visible)
+            .map((element) => element.innerText.trim().slice(0, 200))
+            .slice(0, 10),
+          root_present: Boolean(root),
+          root_child_count: root?.childElementCount ?? 0,
+          root_text: root?.innerText.replace(/\s+/g, ' ').trim().slice(0, 1200) ?? '',
+          scripts: Array.from(document.querySelectorAll('script[src]'))
+            .map((script) => safeAssetName(script.src))
+            .slice(0, 30),
+          recent_resources: resources.map((resource) => ({
+            name: safeAssetName(resource.name),
+            initiator: resource.initiatorType,
+            duration_ms: Math.round(resource.duration),
+            transfer_size: resource.transferSize,
+            decoded_size: resource.decodedBodySize,
+          })),
+        };
+      }),
+      6000,
+      'failure renderer snapshot'
+    );
+  } catch (error) {
+    captured.page_snapshot_error = sanitizeDiagnostic(error.message);
+  }
+  try {
+    captured.ipc = await withTimeout(
+      page.evaluate(async () => {
+        async function probe(operation, project) {
+          let timer;
+          try {
+            return await Promise.race([
+              Promise.resolve()
+                .then(operation)
+                .then(
+                  (value) => ({ state: 'resolved', value: project(value) }),
+                  (error) => ({ state: 'rejected', error: String(error) })
+                ),
+              new Promise((resolve) => {
+                timer = setTimeout(() => resolve({ state: 'timeout' }), 3000);
+              }),
+            ]);
+          } finally {
+            clearTimeout(timer);
+          }
+        }
+        const api = window.electron;
+        const config = await probe(
+          () => api.getConfig(),
+          (value) => ({
+            external_backend: Boolean(value?.GOOSE_EXTERNAL_BACKEND),
+            path_root_present: typeof value?.GOOSE_PATH_ROOT === 'string' && Boolean(value.GOOSE_PATH_ROOT),
+          })
+        );
+        const account_status = await probe(
+          () => api.gmAccount.getStatus(),
+          (value) => ({
+            connected: Boolean(value?.connected),
+            provider_configured: Boolean(value?.providerConfigured),
+            secure_storage_available: Boolean(value?.secureStorageAvailable),
+          })
+        );
+        const acp_url = await probe(
+          () => api.getAcpUrl(),
+          (value) => {
+            if (typeof value !== 'string') return { available: false };
+            try {
+              const endpoint = new URL(value);
+              return {
+                available: true,
+                protocol: endpoint.protocol,
+                host: endpoint.hostname,
+                port_present: Boolean(endpoint.port),
+              };
+            } catch {
+              return { available: false, invalid: true };
+            }
+          }
+        );
+        return { config, account_status, acp_url };
+      }),
+      10000,
+      'failure IPC probes'
+    );
+  } catch (error) {
+    captured.ipc_probe_error = sanitizeDiagnostic(error.message);
+  }
+  return captured;
 }
 async function start() {
   await setPhase('reserve-loopback-debug-port');
@@ -196,6 +412,15 @@ async function start() {
     child,
     browser: null,
     page: null,
+    pages: [],
+    observedPages: new Set(),
+    userDataDirectory: userData,
+    rendererDiagnostics: {
+      console: [],
+      pageErrors: [],
+      failedRequests: [],
+      failedScriptResponses: [],
+    },
     backendPid: null,
     outputBytes: 0,
     diagnosticLines: [],
@@ -237,9 +462,14 @@ async function start() {
     }
   }
   assert(instance.browser, 'Packaged app CDP endpoint did not become ready');
+  for (const context of instance.browser.contexts()) {
+    context.on('page', (candidate) => observePage(candidate, instance));
+    for (const candidate of context.pages()) observePage(candidate, instance);
+  }
   while (Date.now() < deadline) {
     for (const context of instance.browser.contexts()) {
       for (const candidate of context.pages()) {
+        observePage(candidate, instance);
         try {
           if (await withTimeout(
             candidate.evaluate(() => Boolean(window.electron?.gmAccount && document.body.innerText.trim())),
@@ -477,6 +707,32 @@ try {
   report.failure_phase = report.current_phase;
   report.error = sanitizeDiagnostic(error.message);
   if (active) {
+    report.failure_diagnostics_at = new Date().toISOString();
+    try {
+      report.failure_renderer = await captureRendererFailure(active);
+      for (const field of ['title', 'body_text', 'root_text']) {
+        if (report.failure_renderer.page?.[field]) {
+          report.failure_renderer.page[field] = sanitizeDiagnostic(report.failure_renderer.page[field]);
+        }
+      }
+      if (report.failure_renderer.page?.visible_headings) {
+        report.failure_renderer.page.visible_headings = report.failure_renderer.page.visible_headings
+          .map(sanitizeDiagnostic);
+      }
+      if (report.failure_renderer.page?.visible_status_text) {
+        report.failure_renderer.page.visible_status_text = report.failure_renderer.page.visible_status_text
+          .map(sanitizeDiagnostic);
+      }
+      if (report.failure_renderer.ipc) {
+        for (const probe of Object.values(report.failure_renderer.ipc)) {
+          if (probe?.error) probe.error = sanitizeDiagnostic(probe.error);
+        }
+      }
+    } catch (diagnosticError) {
+      report.failure_renderer = { capture_error: sanitizeDiagnostic(diagnosticError.message) };
+    }
+    report.renderer_diagnostics = active.rendererDiagnostics;
+    report.backend_startup_snapshot = await captureBackendStartup(active);
     if (active.carry && /error|warn|failed|exception|panic|ready|health|startup|secure.?storage|keychain/i.test(active.carry)) {
       active.diagnosticLines.push(sanitizeDiagnostic(active.carry));
     }

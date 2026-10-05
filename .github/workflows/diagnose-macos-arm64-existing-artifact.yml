@@ -1,0 +1,224 @@
+name: Diagnose Existing SayGM Desktop macOS ARM64 Artifact
+
+on:
+  push:
+    branches:
+      - maintenance/macos-native-diagnostics
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: saygm-macos-arm64-existing-artifact-diagnostics
+  cancel-in-progress: false
+
+jobs:
+  diagnose-existing-artifact:
+    name: Rerun native smoke against the pinned Mac package
+    runs-on: macos-15
+    timeout-minutes: 25
+    env:
+      SOURCE_RUN_ID: '37359340724'
+      SOURCE_REVISION: 1d895b25181282c93c8130b434fe0127c98ea425
+      SOURCE_BRANCH: maintenance/rehearsal-validated
+      SOURCE_ARTIFACT_ID: '11365658796'
+      SOURCE_ARTIFACT_NAME: saygm-macos-arm64-package-1d895b25181282c93c8130b434fe0127c98ea425
+      SOURCE_ARTIFACT_DIGEST: sha256:b7c15dbb56fab2c47a7511d7b5608bd2997c051cb15f08235d160e7e68775098
+      PACKAGE_SHA256: 7b608326b42b11b71f8c545e49d115c47f659e459147ddc1f562c8b702a97d5a
+      APP_SHA256: 524668ec1dbb5224fd831c4609aaededb0d5765b51c5801b96309830f4b630e6
+      BACKEND_SHA256: 060cae1b4313ca5dc10eb6afc6869d6e468678fbeeaf57387d13572a4fb11e47
+      ASAR_SHA256: 920219315008dfa263e227a66136aa8261f9fb1c9a058b11410e374b412a8de7
+
+    steps:
+      - name: Check out diagnostic harness
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Verify the existing runtime source is unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --quiet "$SOURCE_REVISION" HEAD -- . \
+            ':(exclude)scripts/qa-native-macos-arm64.mjs' \
+            ':(exclude).github/workflows/diagnose-macos-arm64-existing-artifact.yml'
+
+      - name: Verify native Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Verify native Node
+        shell: bash
+        run: test "$(node -p 'process.arch')" = arm64
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.30.3
+
+      - name: Verify the source run and artifact identity
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          const api = `https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}`;
+          const headers = {
+            Accept: 'application/vnd.github+json',
+            Authorization: `Bearer ${process.env.GITHUB_TOKEN}`,
+            'X-GitHub-Api-Version': '2026-03-10',
+          };
+          async function getJson(url) {
+            const response = await fetch(url, { headers });
+            assert.equal(response.status, 200, `GitHub API returned ${response.status}`);
+            return response.json();
+          }
+          const run = await getJson(`${api}/actions/runs/${process.env.SOURCE_RUN_ID}`);
+          assert.equal(run.head_sha, process.env.SOURCE_REVISION);
+          assert.equal(run.head_branch, process.env.SOURCE_BRANCH);
+          const artifactList = await getJson(
+            `${api}/actions/runs/${process.env.SOURCE_RUN_ID}/artifacts?per_page=100`
+          );
+          const artifact = artifactList.artifacts.find(
+            (candidate) => String(candidate.id) === process.env.SOURCE_ARTIFACT_ID
+          );
+          assert.ok(artifact, 'Pinned native package artifact was not found in the source run');
+          assert.equal(artifact.name, process.env.SOURCE_ARTIFACT_NAME);
+          assert.equal(artifact.digest, process.env.SOURCE_ARTIFACT_DIGEST);
+          assert.equal(artifact.expired, false);
+          console.log(JSON.stringify({
+            source_run_id: run.id,
+            source_revision: run.head_sha,
+            source_branch: run.head_branch,
+            source_artifact_id: artifact.id,
+            source_artifact_digest: artifact.digest,
+            source_artifact_size_bytes: artifact.size_in_bytes,
+          }, null, 2));
+          NODE
+
+      - name: Download the pinned native package artifact
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: '11365658796'
+          path: ${{ runner.temp }}/saygm-macos-package-artifact
+          repository: ${{ github.repository }}
+          run-id: '37359340724'
+          github-token: ${{ github.token }}
+
+      - name: Verify and unpack the existing Mac package
+        shell: bash
+        run: |
+          set -euo pipefail
+          package="$RUNNER_TEMP/saygm-macos-package-artifact/SayGM.zip"
+          test -f "$package"
+          test "$(shasum -a 256 "$package" | awk '{ print $1 }')" = "$PACKAGE_SHA256"
+          app_dir="ui/desktop/out/SayGM-darwin-arm64"
+          mkdir -p "$app_dir"
+          ditto -x -k "$package" "$app_dir"
+          app="$app_dir/SayGM.app/Contents/MacOS/SayGM"
+          backend="$app_dir/SayGM.app/Contents/Resources/bin/goose"
+          asar="$app_dir/SayGM.app/Contents/Resources/app.asar"
+          test "$(shasum -a 256 "$app" | awk '{ print $1 }')" = "$APP_SHA256"
+          test "$(shasum -a 256 "$backend" | awk '{ print $1 }')" = "$BACKEND_SHA256"
+          test "$(shasum -a 256 "$asar" | awk '{ print $1 }')" = "$ASAR_SHA256"
+          test "$(lipo -archs "$app")" = arm64
+          test "$(lipo -archs "$backend")" = arm64
+
+      - name: Check disposable runner keychain status without reading items
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ui/desktop/out/qa
+          cat > "$RUNNER_TEMP/keychain-status.swift" <<'SWIFT'
+          import Foundation
+          import Security
+          import Darwin
+
+          var keychain: SecKeychain?
+          let copyStatus = SecKeychainCopyDefault(&keychain)
+          guard copyStatus == errSecSuccess, let keychain else {
+            print("default_keychain_probe=unavailable status=\(copyStatus)")
+            exit(0)
+          }
+          var status = SecKeychainStatus()
+          let statusResult = SecKeychainGetStatus(keychain, &status)
+          if statusResult == errSecSuccess {
+            let unlocked = (status & UInt32(kSecUnlockStateStatus)) != 0
+            print("default_keychain_probe=ok unlocked=\(unlocked)")
+          } else {
+            print("default_keychain_probe=unavailable status=\(statusResult)")
+          }
+          SWIFT
+          swift "$RUNNER_TEMP/keychain-status.swift" \
+            | tee ui/desktop/out/qa/diagnostic-keychain-state.txt
+
+      - name: Install locked desktop dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Run bounded native smoke against the existing package
+        shell: bash
+        timeout-minutes: 10
+        run: |
+          set -euo pipefail
+          app="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/MacOS/SayGM"
+          backend="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/Resources/bin/goose"
+          node scripts/qa-native-macos-arm64.mjs \
+            --app "$app" \
+            --backend "$backend" \
+            --expected-backend-sha256 "$BACKEND_SHA256" \
+            --report ui/desktop/out/qa/qa-native-macos-arm64-diagnostic.json
+
+      - name: Record diagnostic artifact provenance
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p ui/desktop/out/qa
+          node - <<'NODE'
+          const fs = require('node:fs');
+          const { execFileSync } = require('node:child_process');
+          const readReport = (path) => {
+            try { return JSON.parse(fs.readFileSync(path, 'utf8')); } catch { return null; }
+          };
+          const provenance = {
+            diagnostic_run_id: process.env.GITHUB_RUN_ID,
+            diagnostic_harness_revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+            source_run_id: process.env.SOURCE_RUN_ID,
+            source_revision: process.env.SOURCE_REVISION,
+            source_artifact_id: process.env.SOURCE_ARTIFACT_ID,
+            source_artifact_digest: process.env.SOURCE_ARTIFACT_DIGEST,
+            package_sha256: process.env.PACKAGE_SHA256,
+            app_sha256: process.env.APP_SHA256,
+            backend_sha256: process.env.BACKEND_SHA256,
+            asar_sha256: process.env.ASAR_SHA256,
+            runtime_rebuilt: false,
+            smoke_report: readReport('ui/desktop/out/qa/qa-native-macos-arm64-diagnostic.json'),
+          };
+          fs.writeFileSync(
+            'ui/desktop/out/qa/diagnostic-provenance.json',
+            `${JSON.stringify(provenance, null, 2)}\n`
+          );
+          NODE
+
+      - name: Upload failure-time macOS diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-macos-arm64-diagnostic-${{ github.run_id }}
+          path: |
+            ui/desktop/out/qa/qa-native-macos-arm64-diagnostic.json
+            ui/desktop/out/qa/qa-native-macos-arm64-diagnostic.png
+            ui/desktop/out/qa/diagnostic-provenance.json
+            ui/desktop/out/qa/diagnostic-keychain-state.txt
+          if-no-files-found: warn
+          retention-days: 7
