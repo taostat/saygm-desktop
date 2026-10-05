@@ -42,7 +42,7 @@ for (const [name, bytes] of [['Electron app', appBytes], ['embedded backend', ba
   }
 }
 const archivePath = path.join(path.dirname(path.dirname(backendPath)), 'app.asar');
-const bundledMain = asar.extractFile(archivePath, '.vite/build/main.js').toString();
+const bundledMain = asar.extractFile(archivePath, path.join('.vite', 'build', 'main.js')).toString();
 assert(bundledMain.includes('https://account.saygm.com/v1'), 'Installed account service must target production');
 assert(!bundledMain.includes('test-account.saygm.com'), 'Testnet account transport must not be packaged');
 assert(backendBytes.includes(Buffer.from('https://api.saygm.com')), 'Installed SayGM provider must contain its production gateway');
@@ -107,6 +107,7 @@ function childEnvironment() {
   return environment;
 }
 async function start() {
+  if (process.platform === 'win32') report.windows_owned_processes_drained = false;
   const port = await freePort();
   const args = [`--remote-debugging-address=127.0.0.1`, `--remote-debugging-port=${port}`, '--disable-gpu'];
   if (options['password-store']) args.push(`--password-store=${options['password-store']}`);
@@ -173,7 +174,17 @@ async function start() {
   const startup = JSON.parse(await fs.readFile(path.join(startupDirectory, startupFiles.at(-1)), 'utf8'));
   const actualBackend = await fs.realpath(startup.binaryPath);
   assert.equal(process.platform === 'win32' ? actualBackend.toLowerCase() : actualBackend, process.platform === 'win32' ? backendPath.toLowerCase() : backendPath, 'App must launch its own installed backend');
-  assert(startup.pid > 0 && startup.healthCheckSucceeded, 'Installed backend must pass its real startup health check');
+  assert(Number.isInteger(startup.pid) && startup.pid > 0 && startup.healthCheckSucceeded, 'Installed backend must pass its real startup health check');
+  if (process.platform === 'win32') {
+    const moduleJson = execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command',
+      `$ErrorActionPreference = 'Stop'; ConvertTo-Json -Compress -InputObject @((Get-Process -Id ${startup.pid}).Modules | Where-Object { $_.ModuleName -match '^(msvcp|msvcr|vcruntime|concrt)[0-9].*\\.dll$' } | Select-Object ModuleName,FileName)`], { encoding: 'utf8' });
+    const modules = JSON.parse(moduleJson);
+    assert(Array.isArray(modules), 'Windows must return the backend runtime module list');
+    const requiredRuntime = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'];
+    report.windows_vc_runtime_modules = modules;
+    report.windows_vc_runtime_loaded_from_bundle = requiredRuntime.every((name) => modules.some((module) => module.ModuleName.toLowerCase() === name))
+      && modules.every((module) => path.dirname(module.FileName).toLowerCase() === path.dirname(backendPath).toLowerCase());
+  }
   const endpoint = new URL(details.acpUrl);
   assert.equal(endpoint.protocol, 'wss:');
   assert.equal(endpoint.hostname, '127.0.0.1');
@@ -246,6 +257,21 @@ async function stop() {
     }
   }
   await instance.browser?.close().catch(() => undefined);
+  if (process.platform === 'win32') {
+    const ownedExecutables = [appPath, backendPath].map((filename) => `'${filename.replaceAll("'", "''")}'`).join(', ');
+    execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
+      $ErrorActionPreference = 'Stop'
+      $ownedExecutables = @(${ownedExecutables})
+      for ($attempt = 0; $attempt -lt 40; $attempt++) {
+        $remaining = @(Get-Process | Where-Object { $ownedExecutables -contains $_.Path })
+        if ($remaining.Count -eq 0) { exit 0 }
+        $remaining | Stop-Process -Force -ErrorAction SilentlyContinue
+        Start-Sleep -Milliseconds 250
+      }
+      throw 'The disposable app or its bundled backend did not exit before cleanup.'
+    `], { stdio: 'pipe', timeout: 15000 });
+    report.windows_owned_processes_drained = true;
+  }
   active = undefined;
 }
 async function readFixtureState() {
@@ -272,12 +298,11 @@ try {
     fixtureWritten = true;
     await rpc('_goose/unstable/providers/config/save', { providerId: 'saygm', fields: [{ key: 'SAYGM_API_KEY', value: fixture }] });
     assert.equal(await readFixtureState(), true);
+    await stop();
     await assertNoPlaintextFixture();
     await note('Bundled backend stored a disposable non-authoritative fixture in the native secret store');
-    await stop();
     await start();
     assert.equal(await readFixtureState(), true);
-    await assertNoPlaintextFixture();
     const deletion = await rpc('_goose/unstable/providers/secrets/delete-if-sha256-matches', { providerId: 'saygm', key: 'SAYGM_API_KEY', expectedSha256: fixtureHash });
     assert.equal(deletion.deleted, true, 'Restarted backend must decrypt and match the exact fixture before deletion');
     fixtureDeleted = true;
@@ -301,23 +326,42 @@ try {
   }
   await note('Fresh-profile onboarding rendered with the expected sign-in availability');
   await active.page.screenshot({ path: reportPath.replace(/\.json$/, '') + '.png' });
+  await stop();
+  await assertNoPlaintextFixture();
+  if (process.platform === 'win32') {
+    assert.equal(report.windows_vc_runtime_loaded_from_bundle, true, 'Backend Visual C++ runtime DLLs must load from its own bundle, not the build runner');
+  }
   report.result = 'passed';
 } catch (error) {
   report.result = 'failed';
   report.error = String(error.message).replaceAll(fixture, '[fixture]');
   process.exitCode = 1;
 } finally {
-  if (fixtureWritten && !fixtureDeleted && active?.page) {
+  if (fixtureWritten && !fixtureDeleted) {
     try {
+      if (!active?.page) await start();
       const cleanup = await rpc('_goose/unstable/providers/secrets/delete-if-sha256-matches', { providerId: 'saygm', key: 'SAYGM_API_KEY', expectedSha256: fixtureHash });
       fixtureDeleted = cleanup.deleted === true;
     } catch { /* Report incomplete fixture cleanup explicitly. */ }
   }
-  await stop();
+  try { await stop(); }
+  catch (error) {
+    report.result = 'failed';
+    report.cleanup_error = String(error.message).replaceAll(fixture, '[fixture]');
+    process.exitCode = 1;
+  }
   report.fixture_cleanup = !fixtureWritten || fixtureDeleted;
   if (!report.fixture_cleanup) { report.result = 'failed'; process.exitCode = 1; }
-  await fs.rm(temporary, { recursive: true, force: true });
-  if (nativeWindowsUserData) await fs.rm(nativeWindowsUserData, { recursive: true, force: true });
+  try {
+    await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+    if (nativeWindowsUserData) await fs.rm(nativeWindowsUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+    report.profile_cleanup = true;
+  } catch (error) {
+    report.result = 'failed';
+    report.profile_cleanup = false;
+    report.cleanup_error ??= String(error.message).replaceAll(fixture, '[fixture]');
+    process.exitCode = 1;
+  }
   report.completed_at = new Date().toISOString();
   await fs.mkdir(path.dirname(reportPath), { recursive: true });
   await fs.writeFile(reportPath, JSON.stringify(report, null, 2) + '\n');

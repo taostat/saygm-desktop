@@ -1,5 +1,6 @@
 use crate::config::paths::Paths;
 use crate::config::GooseMode;
+use crate::product::ProductPolicy;
 use crate::providers::private_file::{private_file_target_path, write_private_file};
 use fs2::FileExt;
 use goose_providers::thinking::ThinkingEffort;
@@ -30,8 +31,6 @@ fn secrets_lock_path(path: &Path) -> PathBuf {
 
 #[cfg(feature = "system-keyring")]
 const KEYRING_SERVICE: &str = "goose";
-const SAYGM_KEYRING_SERVICE: &str = "saygm-desktop";
-const SAYGM_DESKTOP_ENV: &str = "SAYGM_DESKTOP";
 #[cfg(feature = "system-keyring")]
 const KEYRING_USERNAME: &str = "secrets";
 pub const CONFIG_YAML_NAME: &str = "config.yaml";
@@ -135,7 +134,7 @@ pub struct Config {
     /// The last entry is where changes will be written.
     config_paths: Vec<PathBuf>,
     secrets: SecretStorage,
-    saygm_desktop: bool,
+    product_policy: ProductPolicy,
     #[cfg(feature = "system-keyring")]
     keyring_store: Arc<dyn KeyringStore>,
     #[cfg(test)]
@@ -247,9 +246,9 @@ impl Default for Config {
     fn default() -> Self {
         let config_dir = Paths::config_dir();
         let user_config_path = config_dir.join(CONFIG_YAML_NAME);
-        let saygm_desktop = is_saygm_desktop();
+        let product_policy = ProductPolicy::from_environment();
 
-        let config_paths = if saygm_desktop {
+        let config_paths = if product_policy.uses_isolated_config_paths() {
             vec![user_config_path.clone()]
         } else {
             let mut paths = vec![system_config_path()];
@@ -263,7 +262,7 @@ impl Default for Config {
             secrets: SecretStorage::File {
                 path: Default::default(),
             },
-            saygm_desktop,
+            product_policy,
             #[cfg(feature = "system-keyring")]
             keyring_store: Arc::new(SystemKeyringStore),
             #[cfg(test)]
@@ -272,16 +271,20 @@ impl Default for Config {
             secrets_cache: Arc::new(Mutex::new(None)),
         };
 
-        let keyring_disabled = !saygm_desktop
+        let keyring_disabled = product_policy.allows_keyring_disable()
             && (env::var("GOOSE_DISABLE_KEYRING").is_ok()
                 || no_secrets_config
                     .get_param::<serde_yaml::Value>("GOOSE_DISABLE_KEYRING")
                     .is_ok_and(|v| keyring_disabled_value(&v)));
-        let secrets = secret_storage(&config_dir, keyring_disabled, default_keyring_service());
+        let secrets = secret_storage(
+            &config_dir,
+            keyring_disabled,
+            default_keyring_service(product_policy),
+        );
         Self {
             config_paths,
             secrets,
-            saygm_desktop,
+            product_policy,
             #[cfg(feature = "system-keyring")]
             keyring_store: Arc::new(SystemKeyringStore),
             #[cfg(test)]
@@ -446,7 +449,7 @@ fn keyring_disabled_in_config(config_path: &Path) -> bool {
 }
 
 pub(crate) fn is_saygm_desktop() -> bool {
-    env::var(SAYGM_DESKTOP_ENV).is_ok_and(|value| value == "1")
+    crate::product::current_policy().is_saygm_desktop()
 }
 
 #[cfg(feature = "system-keyring")]
@@ -455,16 +458,12 @@ fn keyring_entry_missing(message: &str) -> bool {
 }
 
 #[cfg(feature = "system-keyring")]
-fn default_keyring_service() -> &'static str {
-    if is_saygm_desktop() {
-        SAYGM_KEYRING_SERVICE
-    } else {
-        KEYRING_SERVICE
-    }
+fn default_keyring_service(product_policy: ProductPolicy) -> &'static str {
+    product_policy.keyring_service(KEYRING_SERVICE)
 }
 
 #[cfg(not(feature = "system-keyring"))]
-fn default_keyring_service() -> &'static str {
+fn default_keyring_service(_product_policy: ProductPolicy) -> &'static str {
     ""
 }
 
@@ -507,24 +506,20 @@ impl Config {
     /// to manage multiple configuration files.
     pub fn new<P: AsRef<Path>>(config_path: P, service: &str) -> Result<Self, ConfigError> {
         let config_path = config_path.as_ref().to_path_buf();
-        let saygm_desktop = is_saygm_desktop();
-        let keyring_disabled = !saygm_desktop
+        let product_policy = ProductPolicy::from_environment();
+        let keyring_disabled = product_policy.allows_keyring_disable()
             && (env::var("GOOSE_DISABLE_KEYRING").is_ok()
                 || keyring_disabled_in_config(&config_path));
         let config_dir = config_path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(Paths::config_dir);
-        let service = if saygm_desktop {
-            SAYGM_KEYRING_SERVICE
-        } else {
-            service
-        };
+        let service = product_policy.keyring_service(service);
         let secrets = secret_storage(&config_dir, keyring_disabled, service);
         Ok(Config {
             config_paths: vec![config_path],
             secrets,
-            saygm_desktop,
+            product_policy,
             #[cfg(feature = "system-keyring")]
             keyring_store: Arc::new(SystemKeyringStore),
             #[cfg(test)]
@@ -547,7 +542,7 @@ impl Config {
             secrets: SecretStorage::File {
                 path: secrets_path.as_ref().to_path_buf(),
             },
-            saygm_desktop: is_saygm_desktop(),
+            product_policy: ProductPolicy::from_environment(),
             #[cfg(feature = "system-keyring")]
             keyring_store: Arc::new(SystemKeyringStore),
             #[cfg(test)]
@@ -566,7 +561,7 @@ impl Config {
             secrets: SecretStorage::File {
                 path: secrets_path.as_ref().to_path_buf(),
             },
-            saygm_desktop: is_saygm_desktop(),
+            product_policy: ProductPolicy::from_environment(),
             #[cfg(feature = "system-keyring")]
             keyring_store: Arc::new(SystemKeyringStore),
             #[cfg(test)]
@@ -1010,7 +1005,7 @@ impl Config {
     /// - The value cannot be deserialized into the requested type
     /// - There is an error accessing the keyring
     pub fn get_secret<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<T, ConfigError> {
-        if !self.saygm_desktop {
+        if self.product_policy.allows_secret_environment_overrides() {
             let env_key = key.to_uppercase();
             if let Ok(val) = env::var(&env_key) {
                 let value = Self::parse_env_value(&val)?;
@@ -1032,7 +1027,8 @@ impl Config {
         primary: &str,
         maybe_secret: &[&str],
     ) -> Result<HashMap<String, String>, ConfigError> {
-        let use_env = !self.saygm_desktop && env::var(primary.to_uppercase()).is_ok();
+        let use_env = self.product_policy.allows_secret_environment_overrides()
+            && env::var(primary.to_uppercase()).is_ok();
         let get_value = |key: &str| -> Result<String, ConfigError> {
             if use_env {
                 env::var(key.to_uppercase()).map_err(|_| ConfigError::NotFound(key.to_string()))
@@ -1063,13 +1059,17 @@ impl Config {
 
                 match result {
                     Ok(content) => Ok(serde_json::from_str(&content)?),
-                    Err(ConfigError::FallbackToFileStorage) if self.saygm_desktop => {
+                    Err(ConfigError::FallbackToFileStorage)
+                        if self.product_policy.requires_system_keyring() =>
+                    {
                         Err(ConfigError::KeyringError(
                             "The SayGM desktop requires the system keyring for secrets".to_string(),
                         ))
                     }
                     Err(ConfigError::FallbackToFileStorage) => self.fallback_to_file_storage(),
-                    Err(ConfigError::KeyringEntryMissing) if self.saygm_desktop => {
+                    Err(ConfigError::KeyringEntryMissing)
+                        if self.product_policy.requires_system_keyring() =>
+                    {
                         Ok(HashMap::new())
                     }
                     Err(ConfigError::KeyringError(msg)) if keyring_entry_missing(&msg) => {
@@ -1078,9 +1078,11 @@ impl Config {
                     Err(e) => Err(e),
                 }
             }
-            SecretStorage::File { .. } if self.saygm_desktop => Err(ConfigError::KeyringError(
-                "The SayGM desktop requires a system keyring build for secrets".to_string(),
-            )),
+            SecretStorage::File { .. } if self.product_policy.requires_system_keyring() => {
+                Err(ConfigError::KeyringError(
+                    "The SayGM desktop requires a system keyring build for secrets".to_string(),
+                ))
+            }
             SecretStorage::File { path } => self.read_secrets_from_file(path),
         }
     }
@@ -1136,7 +1138,7 @@ impl Config {
                     Err(e) => return Err(e),
                 }
             }
-            SecretStorage::File { .. } if self.saygm_desktop => {
+            SecretStorage::File { .. } if self.product_policy.requires_system_keyring() => {
                 return Err(ConfigError::KeyringError(
                     "The SayGM desktop requires a system keyring build for secrets".to_string(),
                 ));
@@ -1388,7 +1390,7 @@ impl Config {
         keyring_err: &keyring::Error,
         fallback_values: Option<&HashMap<String, Value>>,
     ) -> Result<T, ConfigError> {
-        if self.saygm_desktop {
+        if self.product_policy.requires_system_keyring() {
             return Err(match keyring_err {
                 keyring::Error::NoEntry => ConfigError::KeyringEntryMissing,
                 keyring::Error::NoStorageAccess(_) => ConfigError::KeyringAccessDenied,
@@ -1662,9 +1664,11 @@ mod tests {
         let config = Config {
             config_paths: vec![config_path],
             secrets: SecretStorage::Keyring {
-                service: SAYGM_KEYRING_SERVICE.to_string(),
+                service: ProductPolicy::SayGmDesktop
+                    .keyring_service(KEYRING_SERVICE)
+                    .to_string(),
             },
-            saygm_desktop: true,
+            product_policy: ProductPolicy::SayGmDesktop,
             keyring_store: store,
             secrets_lock_path: Some(directory.path().join("secrets.yaml")),
             guard: Mutex::new(()),
@@ -2619,6 +2623,22 @@ mod tests {
         let config_file = NamedTempFile::new().unwrap();
         let secrets_file = NamedTempFile::new().unwrap();
         Config::new_with_file_secrets(config_file.path(), secrets_file.path()).unwrap()
+    }
+
+    #[test]
+    fn config_keeps_its_captured_policy_while_process_policy_is_read_per_call() {
+        let _guard = env_lock::lock_env([("SAYGM_DESKTOP", Some("1"))]);
+        let directory = TempDir::new().unwrap();
+        let config = Config::new_with_file_secrets(
+            directory.path().join(CONFIG_YAML_NAME),
+            directory.path().join("secrets.yaml"),
+        )
+        .unwrap();
+
+        std::env::set_var("SAYGM_DESKTOP", "0");
+
+        assert!(config.product_policy.requires_system_keyring());
+        assert!(!is_saygm_desktop());
     }
 
     /// Create a test config where `base_content` is a lower-priority layer

@@ -8,6 +8,7 @@ import { isLoopbackAcpWebSocketUrl } from '../acp/url';
 import type { GmAcpTarget, GmProviderBridge } from '../services/gmAccountService';
 import { GmAccountService, TOPUP_URL } from '../services/gmAccountService';
 import type { GmGuardrailsPolicyBody, GmGuardrailsPreviewScannerId } from '../types/gmAccount';
+import { SAYGM_PRODUCT } from '../product/saygmProduct';
 
 type GmAccountIpcDependencies = {
   requireRegularRendererWindow: (event: IpcMainInvokeEvent) => BrowserWindow;
@@ -29,8 +30,8 @@ const provider: GmProviderBridge = {
   saveApiKey: async (target, key) =>
     withAcpClient(target, async ({ goose }) => {
       const { refresh } = await goose.providersConfigSave_unstable({
-        providerId: 'saygm',
-        fields: [{ key: 'SAYGM_API_KEY', value: key }],
+        providerId: SAYGM_PRODUCT.providerId,
+        fields: [{ key: SAYGM_PRODUCT.providerApiKeyField, value: key }],
       });
       await waitForSaygmInventory(goose, refresh);
     }),
@@ -38,10 +39,16 @@ const provider: GmProviderBridge = {
     withAcpClient(target, async ({ connection, goose }) => {
       const response: unknown = await connection.agent.request(
         '_goose/unstable/providers/secrets/delete-if-sha256-matches',
-        { providerId: 'saygm', key: 'SAYGM_API_KEY', expectedSha256: sha256 }
+        {
+          providerId: SAYGM_PRODUCT.providerId,
+          key: SAYGM_PRODUCT.providerApiKeyField,
+          expectedSha256: sha256,
+        }
       );
       if (isRecord(response) && response.deleted === true) {
-        await goose.providersInventoryRefresh_unstable({ providerIds: ['saygm'] });
+        await goose.providersInventoryRefresh_unstable({
+          providerIds: [SAYGM_PRODUCT.providerId],
+        });
       }
     }),
 };
@@ -282,7 +289,7 @@ async function withAcpClient<T>(
     await client.connection.agent.request(methods.agent.initialize, {
       protocolVersion: PROTOCOL_VERSION,
       clientCapabilities: { elicitation: { form: {} } },
-      clientInfo: { name: 'SayGM Desktop', version: app.getVersion() },
+      clientInfo: { name: SAYGM_PRODUCT.providerKeyName, version: app.getVersion() },
     });
     return await operation(client);
   } finally {
@@ -296,14 +303,16 @@ async function waitForSaygmInventory(
 ): Promise<void> {
   const deadline = Date.now() + 30_000;
   const shouldWait =
-    refresh.started.includes('saygm') ||
+    refresh.started.includes(SAYGM_PRODUCT.providerId) ||
     refresh.skipped?.some(
-      (skip) => skip.providerId === 'saygm' && skip.reason === 'already_refreshing'
+      (skip) => skip.providerId === SAYGM_PRODUCT.providerId && skip.reason === 'already_refreshing'
     );
 
   while (true) {
-    const { entries } = await goose.providersList_unstable({ providerIds: ['saygm'] });
-    const entry = entries.find((candidate) => candidate.providerId === 'saygm');
+    const { entries } = await goose.providersList_unstable({
+      providerIds: [SAYGM_PRODUCT.providerId],
+    });
+    const entry = entries.find((candidate) => candidate.providerId === SAYGM_PRODUCT.providerId);
     if (!entry) throw new Error('SayGM models are not available in this Goose build.');
     if (!entry.refreshing) {
       if (!entry.configured || !entry.available || entry.models.length === 0) {

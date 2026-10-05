@@ -15,11 +15,11 @@ import type {
   GmDevicePollResult,
   GmOAuthCapability,
 } from '../types/gmAccount';
+import { SAYGM_PRODUCT } from '../product/saygmProduct';
 
-const ACCOUNT_API = 'https://account.saygm.com/v1';
-const GATEWAY_API = 'https://api.saygm.com/v1';
-const TOPUP_URL = 'https://saygm.com/dashboard/credits';
-const CLIENT_ID = 'saygm-desktop';
+const ACCOUNT_API = SAYGM_PRODUCT.accountApiBaseUrl;
+const GATEWAY_API = SAYGM_PRODUCT.gatewayApiBaseUrl;
+const CLIENT_ID = SAYGM_PRODUCT.oauthClientId;
 const DEVICE_GRANT = 'urn:ietf:params:oauth:grant-type:device_code';
 const DEFAULT_POLL_INTERVAL_SECONDS = 5;
 const SLOW_DOWN_SECONDS = 5;
@@ -28,8 +28,8 @@ const GUARDRAIL_PREVIEW_TIMEOUT_MS = 30_000;
 const GUARDRAIL_PREVIEW_MAX_TEXT_BYTES = 128 * 1024;
 const GUARDRAIL_PREVIEW_MAX_BODY_BYTES = 1024 * 1024;
 const GUARDRAIL_PREVIEW_MAX_CONFIG_BYTES = 16 * 1024;
-const CREDENTIALS_FILE = 'saygm-account.safe';
-const API_KEY_NAME = 'SayGM Desktop';
+const CREDENTIALS_FILE = SAYGM_PRODUCT.accountCredentialsFile;
+const API_KEY_NAME = SAYGM_PRODUCT.providerKeyName;
 const CLEANUP_RETRY_COOLDOWN_MS = 60_000;
 type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>;
 type SessionRequestOptions = {
@@ -1611,7 +1611,7 @@ export class GmAccountService {
   }
 }
 
-export { TOPUP_URL };
+export const TOPUP_URL = SAYGM_PRODUCT.creditsUrl;
 
 async function oauthPost(pathname: string, values: Record<string, string>): Promise<JsonResponse> {
   return requestJson(`${ACCOUNT_API}/oauth/${pathname}`, {
@@ -1866,7 +1866,7 @@ function trustedVerificationUri(value: string): string {
   }
   if (
     url.protocol !== 'https:' ||
-    !['saygm.com', 'www.saygm.com', 'account.saygm.com'].includes(url.hostname) ||
+    !SAYGM_PRODUCT.trustedSignInHosts.some((host) => host === url.hostname) ||
     url.username ||
     url.password
   ) {
@@ -1889,7 +1889,7 @@ function credentialsPath(): string {
 }
 
 function cleanupPath(): string {
-  return path.join(app.getPath('userData'), 'saygm-account-cleanup.safe');
+  return path.join(app.getPath('userData'), SAYGM_PRODUCT.cleanupCredentialsFile);
 }
 
 function statusFor(

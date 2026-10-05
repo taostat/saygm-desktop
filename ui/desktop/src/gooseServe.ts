@@ -4,6 +4,7 @@ import { createServer } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
 import { requestPinnedLocalStatus, type PinnedStatusResult } from './acp/pinnedLocalStatus';
+import { SAYGM_PRODUCT } from './product/saygmProduct';
 import {
   appendTail as appendStartupTail,
   createGooseServeStartupDiagnostics,
@@ -386,7 +387,11 @@ const buildGooseServeEnv = (
   env.GOOSE_PATH_ROOT =
     appPathRoot && path.isAbsolute(appPathRoot)
       ? appPathRoot
-      : path.join(homeDir, '.saygm', 'agent');
+      : path.join(
+          homeDir,
+          SAYGM_PRODUCT.fallbackBackendDirectory,
+          SAYGM_PRODUCT.backendDataDirectory
+        );
   delete env.GOOSE_CONFIG_DIR;
   delete env.GOOSE_MODE;
   delete env.GOOSE_EXTERNAL_BACKEND;

@@ -43,9 +43,10 @@ vi.mock('electron', () => ({
 }));
 
 import { GmAccountService, type GmAcpTarget, type GmProviderBridge } from './gmAccountService';
+import { SAYGM_PRODUCT } from '../product/saygmProduct';
 
-const accountBase = 'https://account.saygm.com/v1';
-const gatewayBase = 'https://api.saygm.com/v1';
+const accountBase = SAYGM_PRODUCT.accountApiBaseUrl;
+const gatewayBase = SAYGM_PRODUCT.gatewayApiBaseUrl;
 const targetA: GmAcpTarget = { url: 'wss://127.0.0.1:9001/acp', certificateFingerprint: 'AA' };
 const targetB: GmAcpTarget = { url: 'wss://127.0.0.1:9002/acp', certificateFingerprint: 'BB' };
 

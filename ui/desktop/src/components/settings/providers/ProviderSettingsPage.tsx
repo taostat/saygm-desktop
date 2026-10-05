@@ -10,6 +10,7 @@ import {
 import type { ProviderDetails } from '../../../types/providers';
 import { createNavigationHandler } from '../../../utils/navigationUtils';
 import { defineMessages, useIntl } from '../../../i18n';
+import { isSaygmProviderId } from '../../../product/saygmProduct';
 
 const i18n = defineMessages({
   otherProviders: {
@@ -58,7 +59,7 @@ export default function ProviderSettings({
         ? acpListSetupProviderDetails()
         : acpListSettingsProviderDetails());
       if (result) {
-        setProviders(result.filter((provider) => provider.name === 'saygm'));
+        setProviders(result.filter((provider) => isSaygmProviderId(provider.name)));
         initialLoadDone.current = true;
       }
     } catch (error) {
@@ -80,7 +81,7 @@ export default function ProviderSettings({
       const result = await (isOnboarding
         ? acpListSetupProviderDetails()
         : acpListSettingsProviderDetails());
-      if (result) setProviders(result.filter((provider) => provider.name === 'saygm'));
+      if (result) setProviders(result.filter((provider) => isSaygmProviderId(provider.name)));
     }
   }, [isOnboarding]);
 

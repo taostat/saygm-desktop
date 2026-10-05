@@ -5058,6 +5058,7 @@ dependencies = [
  "goose-context-management",
  "goose-download-manager",
  "goose-mcp",
+ "goose-provider-types",
  "goose-providers",
  "goose-sdk-types",
  "goose-test-support",

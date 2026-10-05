@@ -14,6 +14,7 @@ import type {
   ThinkingEffort,
   UpdateCustomProviderRequest,
 } from '../types/providers';
+import { isSaygmProviderId, SAYGM_PRODUCT } from '../product/saygmProduct';
 import { getAcpClient } from './acpConnection';
 
 export type { CanonicalModelInfoDto, ProviderSecretDto };
@@ -269,8 +270,13 @@ export async function acpSaveProviderConfig(
   providerId: string,
   fields: { key: string; value: string }[]
 ): Promise<void> {
-  if (providerId === 'saygm' && fields.some((field) => field.key === 'SAYGM_API_KEY')) {
-    throw new Error('Manage the SayGM model key from Account settings so its guardrail policy stays matched.');
+  if (
+    isSaygmProviderId(providerId) &&
+    fields.some((field) => field.key === SAYGM_PRODUCT.providerApiKeyField)
+  ) {
+    throw new Error(
+      'Manage the SayGM model key from Account settings so its guardrail policy stays matched.'
+    );
   }
   const client = await getAcpClient();
   await client.goose.providersConfigSave_unstable({ providerId, fields });

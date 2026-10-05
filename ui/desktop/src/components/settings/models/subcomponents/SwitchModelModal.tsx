@@ -28,6 +28,7 @@ import Model, {
 import type { ProviderDetails, ProviderType, ThinkingEffort } from '../../../../types/providers';
 import { trackModelChanged } from '../../../../utils/analytics';
 import { addToRecentModels } from '../../../../utils/recentModels';
+import { SAYGM_PRODUCT } from '../../../../product/saygmProduct';
 
 const i18n = defineMessages({
   thinkingEffortOff: {
@@ -238,7 +239,9 @@ export const SwitchModelModal = ({
   const currentModel = sessionModel ?? configModel;
   const currentProvider = sessionProvider ?? configProvider;
   const selectedProvider =
-    initialProvider === 'saygm' || currentProvider === 'saygm' ? 'saygm' : null;
+    initialProvider === SAYGM_PRODUCT.providerId || currentProvider === SAYGM_PRODUCT.providerId
+      ? SAYGM_PRODUCT.providerId
+      : null;
   const [providerOptions, setProviderOptions] = useState<{ value: string; label: string }[]>([]);
   type ModelOption = {
     value: string;
@@ -250,7 +253,9 @@ export const SwitchModelModal = ({
   const [modelOptions, setModelOptions] = useState<{ options: ModelOption[] }[]>([]);
   const [provider, setProvider] = useState<string | null>(selectedProvider);
   const [model, setModel] = useState<string>(
-    selectedProvider === 'saygm' && currentProvider === 'saygm' ? currentModel || '' : ''
+    selectedProvider === SAYGM_PRODUCT.providerId && currentProvider === SAYGM_PRODUCT.providerId
+      ? currentModel || ''
+      : ''
   );
   const [validationErrors, setValidationErrors] = useState({
     provider: '',
@@ -322,7 +327,7 @@ export const SwitchModelModal = ({
     };
     let formIsValid = true;
 
-    if (provider !== 'saygm') {
+    if (provider !== SAYGM_PRODUCT.providerId) {
       errors.provider = intl.formatMessage(i18n.selectProvider);
       formIsValid = false;
     }
@@ -353,7 +358,7 @@ export const SwitchModelModal = ({
       const providerDisplayName = providerMetaData.display_name;
       let modelObj: Model = {
         name: model,
-        provider: 'saygm',
+        provider: SAYGM_PRODUCT.providerId,
         subtext: providerDisplayName,
       };
       modelObj = {
@@ -373,7 +378,7 @@ export const SwitchModelModal = ({
       const success = await changeModel(sessionId, modelObj);
       if (success) {
         trackModelChanged(modelObj.provider || '', modelObj.name);
-        if (currentModel && currentProvider === 'saygm') {
+        if (currentModel && currentProvider === SAYGM_PRODUCT.providerId) {
           const current = (await window.electron.getSetting('recentModels')) ?? [];
           await window.electron.setSetting(
             'recentModels',
@@ -400,7 +405,7 @@ export const SwitchModelModal = ({
   // switching provider clears model intentionally).
   const manualSyncDone = useRef(false);
   useEffect(() => {
-    if (manualSyncDone.current || currentProvider !== 'saygm') return;
+    if (manualSyncDone.current || currentProvider !== SAYGM_PRODUCT.providerId) return;
     if (initialProvider && initialProvider !== currentProvider) return;
     if (currentModel && currentProvider) {
       if (!provider) setProvider(currentProvider);
@@ -414,7 +419,7 @@ export const SwitchModelModal = ({
       try {
         const providersResponse = await acpListProviderDetails();
         const activeProviders = providersResponse.filter(
-          (provider) => provider.name === 'saygm' && provider.is_configured
+          (provider) => provider.name === SAYGM_PRODUCT.providerId && provider.is_configured
         );
         setActiveProvidersList(activeProviders);
         setProviderOptions(
@@ -635,7 +640,9 @@ export const SwitchModelModal = ({
                 value={providerOptions.find((option) => option.value === provider) || null}
                 onChange={(newValue: unknown) => {
                   const option = newValue as { value: string; label: string } | null;
-                  setProvider(option?.value === 'saygm' ? 'saygm' : null);
+                  setProvider(
+                    option?.value === SAYGM_PRODUCT.providerId ? SAYGM_PRODUCT.providerId : null
+                  );
                   setModel('');
                   setUserClearedModel(false);
                 }}
