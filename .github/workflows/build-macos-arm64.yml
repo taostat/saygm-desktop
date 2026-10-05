@@ -93,8 +93,17 @@ jobs:
           ELECTRON_ARCH: arm64
         run: pnpm run bundle:default
 
+      - name: Upload packaged Mac candidate before smoke checks
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-macos-arm64-package-${{ github.sha }}
+          path: ui/desktop/out/SayGM-darwin-arm64/SayGM.zip
+          if-no-files-found: error
+          retention-days: 7
+
       - name: Verify packaged app and run isolated native smoke
         shell: bash
+        timeout-minutes: 8
         run: |
           set -euo pipefail
           app="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/MacOS/SayGM"
