@@ -32,6 +32,8 @@ def main():
         parser.error("source worktree must be clean; commit scoped changes first")
     if args.worktree.exists():
         parser.error("worktree destination already exists")
+    if root == args.worktree.resolve() or root in args.worktree.resolve().parents:
+        parser.error("worktree destination must be outside the source checkout")
     base = manifest["integrated_revision"]
     for ancestor, descendant in ((base, "HEAD"), (base, args.revision)):
         if git(root, "merge-base", "--is-ancestor", ancestor, descendant, check=False).returncode:
