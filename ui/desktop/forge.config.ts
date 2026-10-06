@@ -1,7 +1,7 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const { createHash } = require('node:crypto');
-const { readFile, rm } = require('node:fs/promises');
+const { readFile, rm, writeFile } = require('node:fs/promises');
 const { resolve } = require('path');
 
 const isLinuxVulkanBuild = process.env.GOOSE_DESKTOP_LINUX_VARIANT === 'vulkan';
@@ -43,10 +43,28 @@ function removeBuildOnlyBinFiles(
   }, callback);
 }
 
+function setPackagedBetaVersion(buildPath, _electronVersion, platform, _arch, callback) {
+  if (platform !== 'darwin' || !betaVersion) {
+    callback();
+    return;
+  }
+
+  const packagePath = resolve(buildPath, 'package.json');
+  readFile(packagePath, 'utf8')
+    .then((contents) => {
+      const packageJson = JSON.parse(contents);
+      packageJson.version = betaVersion;
+      return writeFile(packagePath, `${JSON.stringify(packageJson, null, 2)}\n`);
+    })
+    .then(() => callback())
+    .catch(callback);
+}
+
 let cfg = {
   asar: true,
   name: 'SayGM',
   appBundleId: 'com.saygm.desktop',
+  afterCopy: [setPackagedBetaVersion],
   afterCopyExtraResources: [removeBuildOnlyBinFiles],
   extraResource: ['src/bin', 'src/images', 'src/fonts/licenses', '../../LICENSE'],
   icon: 'src/images/icon',

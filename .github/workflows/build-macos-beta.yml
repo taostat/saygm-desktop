@@ -62,11 +62,20 @@ jobs:
           test "$(node -p 'process.arch')" = arm64
           rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
 
-      - name: Cache Rust build outputs
+      - name: Restore the existing Rust dependency cache
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: saygm-desktop-macos-arm64-default
+          save-if: false
           cache-on-failure: true
+
+      - name: Cache Rust build outputs including workspace crates
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          # Start a new cache generation; the previous step restores existing dependency artifacts.
+          key: saygm-desktop-macos-arm64-workspace-crates-v1
+          cache-on-failure: true
+          cache-workspace-crates: true
 
       - name: Install locked desktop dependencies
         working-directory: ui
@@ -87,6 +96,28 @@ jobs:
           certificate-base64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
           certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
           team-id: ${{ vars.APPLE_TEAM_ID }}
+
+      - name: Prove imported identity can sign before compilation
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.signing-identity }}
+          KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          probe="$RUNNER_TEMP/saygm-signing-probe"
+          cp /usr/bin/true "$probe"
+          chmod 755 "$probe"
+          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" \
+            --sign "$APPLE_SIGNING_IDENTITY" --options runtime "$probe"
+          codesign --verify --strict --verbose=2 "$probe"
+          details="$(codesign --display --verbose=4 "$probe" 2>&1)"
+          grep -F "Authority=$APPLE_SIGNING_IDENTITY" <<< "$details"
+          grep -F "TeamIdentifier=$APPLE_TEAM_ID" <<< "$details"
+          grep -E 'flags=.*\(runtime\)' <<< "$details"
+          rm -f "$probe"
+          test ! -e "$probe"
+          echo "Imported Developer ID identity signed and verified a disposable probe."
 
       - name: Prepare notarization credentials
         shell: bash
@@ -207,6 +238,22 @@ jobs:
             --require-secure-storage true \
             --report "$report"
 
+      - name: Verify beta runtime version in the native smoke report
+        shell: bash
+        env:
+          SAYGM_BETA_VERSION: ${{ env.SAYGM_BETA_VERSION }}
+        run: |
+          set -euo pipefail
+          node - artifacts/qa/qa-native-macos-arm64.json <<'NODE'
+          const fs = require('node:fs');
+          const assert = require('node:assert/strict');
+          const [reportPath] = process.argv.slice(2);
+          const report = JSON.parse(fs.readFileSync(reportPath, 'utf8'));
+          const versionEvent = report.events.find((event) => event.name === 'Packaged renderer/preload, isolated profile, and local TLS backend are live');
+          assert(versionEvent, 'Native smoke report is missing the app version event.');
+          assert.equal(versionEvent.version, process.env.SAYGM_BETA_VERSION, 'Packaged runtime version must match the beta artifact version.');
+          NODE
+
       - name: Create signed and notarized ZIP and DMG
         shell: bash
         env:
@@ -276,11 +323,13 @@ jobs:
           const hash = (filename) => createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
           const [output, app, backend, zip, dmg, report, notarization] = process.argv.slice(2);
           const qa = JSON.parse(fs.readFileSync(report, 'utf8'));
+          const runtimeEvent = qa.events.find((event) => event.name === 'Packaged renderer/preload, isolated profile, and local TLS backend are live');
           const appExecutableSha256 = hash(`${app}/Contents/MacOS/SayGM`);
           const asarSha256 = hash(`${app}/Contents/Resources/app.asar`);
           const backendSha256 = hash(backend);
           assert.match(process.env.SAYGM_MACOS_SOURCE_BACKEND_SHA256 ?? '', /^[a-f0-9]{64}$/, 'Native source backend hash is required.');
           assert.equal(qa.result, 'passed', 'Native smoke must pass before artifact qualification.');
+          assert.equal(runtimeEvent?.version, process.env.SAYGM_BETA_VERSION, 'Native smoke must report the packaged beta runtime version.');
           assert.equal(qa.secure_storage_available, true, 'Secure storage must be available in the signed candidate.');
           assert.equal(qa.profile_cleanup, true, 'Native smoke must remove its owned profile.');
           assert.equal(qa.app_sha256, appExecutableSha256, 'Smoke must have tested the exact app executable being archived.');
@@ -298,6 +347,7 @@ jobs:
             node_version: process.version,
             app_bundle_id: 'com.saygm.desktop',
             app_version: execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', `${app}/Contents/Info.plist`], { encoding: 'utf8' }).trim(),
+            runtime_version: runtimeEvent.version,
             apple_team_id: process.env.APPLE_TEAM_ID,
             signing_identity: process.env.APPLE_SIGNING_IDENTITY,
             notarization_method: process.env.SAYGM_NOTARIZATION_METHOD,
@@ -332,6 +382,46 @@ jobs:
           set -uo pipefail
           cleanup_failed=0
           keychain_path="${KEYCHAIN_PATH:-$RUNNER_TEMP/signing.keychain-db}"
+          keychain_list_path="$RUNNER_TEMP/signing-keychain-original-list.json"
+          signing_probe="$RUNNER_TEMP/saygm-signing-probe"
+          if [[ -f "$keychain_list_path" ]]; then
+            if python3 - "$keychain_list_path" <<'PY'
+          import json
+          import shlex
+          import subprocess
+          import sys
+
+          try:
+              with open(sys.argv[1], encoding="utf-8") as snapshot:
+                  original = json.load(snapshot)
+              subprocess.run(
+                  ["security", "list-keychains", "-d", "user", "-s", *original],
+                  check=True,
+                  stdout=subprocess.DEVNULL,
+                  stderr=subprocess.DEVNULL,
+              )
+              actual = shlex.split(
+                  subprocess.check_output(
+                      ["security", "list-keychains", "-d", "user"],
+                      text=True,
+                      stderr=subprocess.DEVNULL,
+                  )
+              )
+              if actual != original:
+                  raise RuntimeError("restored keychain search list differs")
+          except Exception:
+              raise SystemExit(1)
+          PY
+            then
+              echo "Original user keychain search list restored and verified."
+            else
+              echo "::error::Could not restore the runner's original user keychain search list."
+              cleanup_failed=1
+            fi
+          elif [[ -e "$keychain_path" ]]; then
+            echo "::error::Temporary keychain exists without a saved original search list."
+            cleanup_failed=1
+          fi
           if [[ -e "$keychain_path" ]]; then
             security delete-keychain "$keychain_path" >/dev/null 2>&1 || cleanup_failed=1
           fi
@@ -340,9 +430,12 @@ jobs:
           elif [[ -n "$APPLE_API_KEY_ID" ]]; then
             rm -f "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8" || cleanup_failed=1
           fi
-          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/signing.keychain-db" || cleanup_failed=1
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/signing.keychain-db" \
+            "$keychain_list_path" "$signing_probe" || cleanup_failed=1
           [[ ! -e "$keychain_path" ]] || cleanup_failed=1
           [[ ! -e "$RUNNER_TEMP/certificate.p12" ]] || cleanup_failed=1
+          [[ ! -e "$keychain_list_path" ]] || cleanup_failed=1
+          [[ ! -e "$signing_probe" ]] || cleanup_failed=1
           if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
             [[ ! -e "$APPLE_API_KEY_PATH" ]] || cleanup_failed=1
           elif [[ -n "$APPLE_API_KEY_ID" ]]; then

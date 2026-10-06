@@ -36,12 +36,34 @@ runs:
 
         CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
         KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
+        KEYCHAIN_LIST_PATH="$RUNNER_TEMP/signing-keychain-original-list.json"
         KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
         trap 'rm -f "$CERTIFICATE_PATH"' EXIT
 
         : "${APPLE_CERTIFICATE_BASE64:?APPLE_CERTIFICATE_P12_BASE64 is required}"
         : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD is required}"
         : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}"
+
+        # Save the runner's search list before creating the temporary keychain.
+        # The temporary chain must be searchable by codesign, while the user's
+        # default keychain and original search-list entries remain untouched.
+        python3 - "$KEYCHAIN_LIST_PATH" <<'PY'
+        import json
+        import shlex
+        import subprocess
+        import sys
+
+        output = subprocess.check_output(
+            ["security", "list-keychains", "-d", "user"], text=True
+        )
+        paths = shlex.split(output)
+        if not paths:
+            raise SystemExit("The runner user keychain search list is empty.")
+        with open(sys.argv[1], "w", encoding="utf-8") as snapshot:
+            json.dump(paths, snapshot)
+            snapshot.write("\n")
+        PY
+
         printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
         printf 'KEYCHAIN_PATH=%s\n' "$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
@@ -57,6 +79,32 @@ runs:
         security set-key-partition-list \
           -S apple-tool:,apple: \
           -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
+
+        python3 - "$KEYCHAIN_LIST_PATH" "$KEYCHAIN_PATH" <<'PY'
+        import json
+        import shlex
+        import subprocess
+        import sys
+
+        with open(sys.argv[1], encoding="utf-8") as snapshot:
+            original = json.load(snapshot)
+        temporary = sys.argv[2]
+        if temporary in original:
+            raise SystemExit("Temporary signing keychain unexpectedly exists in the original search list.")
+        expected = [*original, temporary]
+        subprocess.run(
+            ["security", "list-keychains", "-d", "user", "-s", *expected],
+            check=True,
+            stdout=subprocess.DEVNULL,
+        )
+        actual = shlex.split(
+            subprocess.check_output(
+                ["security", "list-keychains", "-d", "user"], text=True
+            )
+        )
+        if actual != expected:
+            raise SystemExit("The temporary signing keychain search list could not be verified.")
+        PY
 
         identities="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
           | sed -nE 's/^[[:space:]]*[0-9]+\) [A-Fa-f0-9]{40} "([^"]+)"$/\1/p' \
