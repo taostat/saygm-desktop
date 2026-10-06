@@ -9,8 +9,8 @@ build_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 build_out=""
 staged_goose="$repo_root/ui/desktop/src/bin/goose"
 source_goose="$repo_root/target/release/goose"
-temporary_stage="${staged_goose}.rc5-tmp"
-release_version="$(node -p "require('$repo_root/ui/desktop/package.json').version")"
+temporary_stage="${staged_goose}.release-tmp"
+release_version="${SAYGM_BETA_VERSION:-$(node -p "require('$repo_root/ui/desktop/package.json').version")}"
 
 case "$build_arch" in
   x64)
@@ -33,8 +33,8 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != "$expected_host_arch" ]]; then
   echo "This release build must run on native Ubuntu $expected_host_arch." >&2
   exit 2
 fi
-if [[ "$release_version" != 0.1.0-rc.5 ]]; then
-  echo "Expected desktop version 0.1.0-rc.5, found $release_version." >&2
+if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Desktop version must be a semantic version with an optional prerelease label, found $release_version." >&2
   exit 2
 fi
 if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
@@ -43,7 +43,7 @@ if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
 fi
 
 mkdir -p "$artifact_dir" "$build_parent"
-build_out="$(mktemp -d "$build_parent/saygm-ubuntu-rc5-forge.XXXXXX")"
+build_out="$(mktemp -d "$build_parent/saygm-ubuntu-${release_version}-forge.XXXXXX")"
 staged=false
 source_hash=""
 work_dir=""
@@ -75,7 +75,7 @@ staged=true
 
 pnpm --dir ui/desktop run build-goose-acp-client
 pnpm --dir ui/desktop run i18n:compile
-SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH="$build_arch" pnpm --dir ui/desktop exec electron-forge make \
+SAYGM_BETA_VERSION="$release_version" SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH="$build_arch" pnpm --dir ui/desktop exec electron-forge make \
   --platform=linux \
   --arch="$build_arch" \
   --targets=@electron-forge/maker-deb,@electron-forge/maker-zip
@@ -91,7 +91,7 @@ fi
 final_deb="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.deb"
 final_zip="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.zip"
 if [[ -e "$final_deb" || -e "$final_zip" ]]; then
-  echo "Refusing to overwrite existing Ubuntu RC5 artifacts in $artifact_dir." >&2
+  echo "Refusing to overwrite existing Ubuntu artifacts in $artifact_dir." >&2
   exit 2
 fi
 cp "$deb_source" "$final_deb"
@@ -189,7 +189,10 @@ node "$repo_root/scripts/verify-ubuntu-release.mjs" \
   --zip "$final_zip" \
   --source-backend "$source_goose" \
   --arch "$build_arch" \
+  --expected-version "$release_version" \
   --report "$artifact_dir/package-verification.json"
+node "$repo_root/scripts/verify-beta-source-base.mjs" "${SAYGM_PRODUCT_SOURCE_SHA:?SAYGM_PRODUCT_SOURCE_SHA is required for beta artifacts}" \
+  > "$artifact_dir/source-verification.json"
 
 cat > "$artifact_dir/INSTALL-UBUNTU.txt" <<EOF
 SayGM Desktop ${release_version} for Ubuntu ${build_arch}
@@ -200,16 +203,17 @@ The portable ZIP contains the app and can be extracted and launched without inst
 Linux credentials require an unlocked Secret Service provider such as GNOME Keyring.
 SayGM refuses OAuth setup when secure storage is unavailable; basic_text storage is not accepted.
 
-This is a private RC5 build using production SayGM API and gateway endpoints.
+This is a private ${release_version} build using production SayGM API and gateway endpoints.
 No account login or inference was performed by the package build.
 EOF
 
 cat > "$artifact_dir/BUILD-INFO.txt" <<EOF
 Version: ${release_version}
 Platform: Ubuntu 22.04 ${build_arch}
+Product source revision: ${SAYGM_PRODUCT_SOURCE_SHA:-unknown}
+Build automation revision: $(git -C "$repo_root" rev-parse HEAD)
 Backend source: target/release/goose built by cargo build --locked --release -p goose-cli --bin goose
 Backend SHA-256: ${source_hash}
-Build commit: $(git -C "$repo_root" rev-parse HEAD)
 EOF
 
-echo "Ubuntu RC5 artifacts created in $artifact_dir"
+echo "Ubuntu ${release_version} artifacts created in $artifact_dir"

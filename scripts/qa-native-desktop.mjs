@@ -21,8 +21,9 @@ for (const required of ['app', 'backend', 'expect-storage', 'report']) assert(op
 assert(['available', 'unavailable'].includes(options['expect-storage']));
 assert(['linux', 'win32'].includes(process.platform), 'This test must run on the native target OS');
 const expectedArchitecture = options['expect-arch'] ?? 'x64';
+const expectedVersion = options['expected-version'] ?? '0.1.0-rc.5';
 assert(['x64', 'arm64'].includes(expectedArchitecture), 'Expected architecture must be x64 or arm64');
-assert(process.platform === 'linux' || expectedArchitecture === 'x64', 'Windows RC5 supports x64 only');
+assert(process.platform === 'linux' || expectedArchitecture === 'x64', 'Windows desktop supports x64 only');
 assert.equal(process.arch, expectedArchitecture, 'QA must run natively on the requested artifact architecture');
 const appPath = await fs.realpath(path.resolve(options.app));
 const backendPath = await fs.realpath(path.resolve(options.backend));
@@ -74,6 +75,9 @@ const report = {
   platform: process.platform,
   architecture: process.arch,
   expected_architecture: expectedArchitecture,
+  expected_version: expectedVersion,
+  product_source_revision: process.env.SAYGM_PRODUCT_SOURCE_SHA ?? null,
+  build_automation_revision: process.env.GITHUB_SHA ?? null,
   app_and_backend_binary_architectures_verified: true,
   boundary: 'Actual packaged app and embedded backend; isolated app-data and disposable non-authoritative fixture only. No account login, customer credential, inference, or payment. CDP is bound to loopback for this test only. The invoking workflow records whether the app was installed or extracted from a portable archive.',
   expected_storage: options['expect-storage'],
@@ -156,7 +160,8 @@ async function start() {
   }));
   assert.equal(details.platform, process.platform);
   assert.equal(details.arch, expectedArchitecture);
-  assert.equal(details.version, '0.1.0-rc.5');
+  assert.equal(details.version, expectedVersion);
+  report.runtime_version = details.version;
   const runtimeRoot = path.resolve(details.config.GOOSE_PATH_ROOT);
   const temporaryRoot = path.join(temporaryUserData, 'agent');
   const nativeRoot = nativeWindowsUserData ? path.join(nativeWindowsUserData, 'agent') : null;

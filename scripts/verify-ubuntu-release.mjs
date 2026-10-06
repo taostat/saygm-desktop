@@ -16,6 +16,8 @@ for (let index = 2; index < process.argv.length; index += 2) {
   args[process.argv[index].slice(2)] = process.argv[index + 1];
 }
 for (const name of ['deb', 'zip', 'source-backend', 'arch', 'report']) assert(args[name], `Missing --${name}`);
+const expectedVersion = args['expected-version'] ?? process.env.SAYGM_BETA_VERSION ?? '0.1.0-rc.5';
+const expectedDebianVersion = expectedVersion.replace('-', '~');
 
 const architectures = {
   x64: { debian: 'amd64', machine: /Machine:\s+Advanced Micro Devices X86-64/ },
@@ -30,7 +32,7 @@ const packageName = output(['dpkg-deb', '--field', args.deb, 'Package']);
 const version = output(['dpkg-deb', '--field', args.deb, 'Version']);
 const architecture = output(['dpkg-deb', '--field', args.deb, 'Architecture']);
 assert.equal(packageName, 'saygm');
-assert.equal(version, '0.1.0~rc.5');
+assert.equal(version, expectedDebianVersion);
 assert.equal(architecture, expectedArchitecture.debian);
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-deb-verify-'));
@@ -82,6 +84,10 @@ try {
     } catch { /* Not an app executable. */ }
   }
   assert(debAsar && zipAsar && zipBackend && zipApp, 'Debian and ZIP packages must include app ASAR and Goose backend');
+  const debAppPackage = JSON.parse(asar.extractFile(debAsar, 'package.json').toString());
+  const zipAppPackage = JSON.parse(asar.extractFile(zipAsar, 'package.json').toString());
+  assert.equal(debAppPackage.version, expectedVersion, 'Debian ASAR package.json must have the expected beta version');
+  assert.equal(zipAppPackage.version, expectedVersion, 'ZIP ASAR package.json must have the expected beta version');
 
   const sensitivePath = /(^|\/)(\.env(?:\.[^/]*)?|credentials?|private[-_]?profile|test[-_]?fixture[-_]?keys?)(\/|$)/i;
   const asarPaths = { deb: asar.listPackage(debAsar), zip: asar.listPackage(zipAsar) };
@@ -93,6 +99,12 @@ try {
   const expectedBackendHash = await sha256(args['source-backend']);
   assert.equal(await sha256(debBackend), expectedBackendHash, 'Debian package backend must match Cargo output');
   assert.equal(await sha256(zipBackend), expectedBackendHash, 'Portable package backend must match Cargo output');
+  const debAppHash = await sha256(debApp);
+  const zipAppHash = await sha256(zipApp);
+  const debAsarHash = await sha256(debAsar);
+  const zipAsarHash = await sha256(zipAsar);
+  assert.equal(debAppHash, zipAppHash, 'Debian and ZIP app executables must be identical');
+  assert.equal(debAsarHash, zipAsarHash, 'Debian and ZIP ASARs must be identical');
   for (const executable of [debApp, debBackend, zipApp, zipBackend]) {
     assert.match(output(['readelf', '-h', executable]), expectedArchitecture.machine, `${executable} has the wrong ELF architecture`);
   }
@@ -125,12 +137,17 @@ try {
     result: 'passed',
     package: packageName,
     debian_version: version,
-    desktop_version: '0.1.0-rc.5',
+    desktop_version: expectedVersion,
+    product_source_revision: process.env.SAYGM_PRODUCT_SOURCE_SHA ?? null,
+    build_automation_revision: process.env.GITHUB_SHA ?? null,
     build_arch: args.arch,
     architecture,
     deb_sha256: await sha256(args.deb),
     zip_sha256: await sha256(args.zip),
+    app_sha256: debAppHash,
+    asar_sha256: debAsarHash,
     goose_sha256: expectedBackendHash,
+    asar_package_version: debAppPackage.version,
     package_desktop_entry: path.relative(packageRoot, debDesktop),
     package_exec: '/usr/bin/saygm',
     package_icon: 'saygm',

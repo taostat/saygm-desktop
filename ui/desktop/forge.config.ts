@@ -43,8 +43,8 @@ function removeBuildOnlyBinFiles(
   }, callback);
 }
 
-function setPackagedBetaVersion(buildPath, _electronVersion, platform, _arch, callback) {
-  if (platform !== 'darwin' || !betaVersion) {
+function setPackagedBetaVersion(buildPath, _electronVersion, _platform, _arch, callback) {
+  if (!betaVersion) {
     callback();
     return;
   }

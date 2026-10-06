@@ -18,15 +18,20 @@ permissions:
 
 jobs:
   build:
-    name: Ubuntu 22.04 ${{ matrix.architecture }} RC5
+    name: Ubuntu 22.04 ${{ matrix.architecture }} beta.1
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 150
+    env:
+      SAYGM_BETA_VERSION: 0.1.0-beta.1
+      SAYGM_PRODUCT_SOURCE_SHA: 3f1ae1faca899815dab3447f2eb032c3072218d6
     strategy:
       fail-fast: false
       matrix:
         architecture: ${{ fromJSON(inputs.architecture == 'both' && '["x64","arm64"]' || format('["{0}"]', inputs.architecture)) }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Install system build and smoke dependencies
         run: |
@@ -51,6 +56,12 @@ jobs:
           cache: pnpm
           cache-dependency-path: ui/pnpm-lock.yaml
 
+      - name: Verify product source matches the signed Mac beta
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts
+          node scripts/verify-beta-source-base.mjs "$SAYGM_PRODUCT_SOURCE_SHA" | tee artifacts/source-verification.json
+
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.96.1
@@ -68,7 +79,7 @@ jobs:
 
       - name: Install and inspect Debian package
         run: |
-          sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb"
+          sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-${SAYGM_BETA_VERSION}-linux-${{ matrix.architecture }}.deb"
           test "$(dpkg-query -W -f='${Architecture}' saygm)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
           test -x /usr/bin/saygm
           test -x /usr/lib/saygm/SayGM
@@ -78,12 +89,37 @@ jobs:
           grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
           grep -Fx 'Icon=saygm' "$desktop_file"
           ldd /usr/lib/saygm/resources/bin/goose | tee artifacts/goose-ldd.txt
-          ! grep -F 'not found' artifacts/goose-ldd.txt
+          if grep -F 'not found' artifacts/goose-ldd.txt; then exit 1; fi
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import { createHash } from 'node:crypto';
+          import { readFile, writeFile } from 'node:fs/promises';
+          const report = JSON.parse(await readFile('artifacts/package-verification.json', 'utf8'));
+          const hash = async (path) => createHash('sha256').update(await readFile(path)).digest('hex');
+          const installed = {
+            app_sha256: await hash('/usr/lib/saygm/SayGM'),
+            backend_sha256: await hash('/usr/lib/saygm/resources/bin/goose'),
+            asar_sha256: await hash('/usr/lib/saygm/resources/app.asar'),
+          };
+          assert.equal(installed.app_sha256, report.app_sha256, 'Installed Debian app differs from verified package');
+          assert.equal(installed.backend_sha256, report.goose_sha256, 'Installed Debian backend differs from verified package');
+          assert.equal(installed.asar_sha256, report.asar_sha256, 'Installed Debian ASAR differs from verified package');
+          const manifest = {
+            result: 'passed',
+            product_source_revision: process.env.SAYGM_PRODUCT_SOURCE_SHA,
+            build_automation_revision: process.env.GITHUB_SHA,
+            version: process.env.SAYGM_BETA_VERSION,
+            deb_package_verification: report,
+            installed_package_hashes: installed,
+            installed_files_match_verified_package: true,
+          };
+          await writeFile('artifacts/installed-package-verification.json', `${JSON.stringify(manifest, null, 2)}\n`);
+          NODE
 
       - name: Smoke test native app and protected storage
         run: |
           set -euo pipefail
-          export QA_KEYRING_PASSWORD="saygm-rc5-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export QA_KEYRING_PASSWORD="saygm-beta1-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dbus-run-session -- bash -euo pipefail -s <<'BASH'
             export XDG_RUNTIME_DIR="${RUNNER_TEMP}/saygm-runtime"
             export XDG_DATA_HOME="${RUNNER_TEMP}/saygm-xdg-data"
@@ -100,6 +136,7 @@ jobs:
               --app /usr/lib/saygm/SayGM \
               --backend /usr/lib/saygm/resources/bin/goose \
               --expect-arch "${{ matrix.architecture }}" \
+              --expected-version "$SAYGM_BETA_VERSION" \
               --expect-storage available \
               --password-store gnome-libsecret \
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-secret-service.json"
@@ -107,6 +144,7 @@ jobs:
               --app /usr/lib/saygm/SayGM \
               --backend /usr/lib/saygm/resources/bin/goose \
               --expect-arch "${{ matrix.architecture }}" \
+              --expected-version "$SAYGM_BETA_VERSION" \
               --expect-storage unavailable \
               --password-store basic \
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-basic-storage.json"
@@ -115,12 +153,12 @@ jobs:
       - name: Write final checksums
         run: |
           cd artifacts
-          sha256sum "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb" "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
+          sha256sum "SayGM-${SAYGM_BETA_VERSION}-linux-${{ matrix.architecture }}.deb" "SayGM-${SAYGM_BETA_VERSION}-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: saygm-desktop-0.1.0-rc.5-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
+          name: saygm-desktop-0.1.0-beta.1-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
