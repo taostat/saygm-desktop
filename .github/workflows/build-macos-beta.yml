@@ -1,0 +1,382 @@
+name: Build signed SayGM Desktop macOS beta
+
+on:
+  push:
+    branches:
+      - codex/signed-macos-beta
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saygm-desktop-macos-beta-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-macos-arm64-beta:
+    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/signed-macos-beta'
+    name: Sign, notarize, and verify Apple Silicon beta
+    runs-on: macos-15
+    timeout-minutes: 240
+    env:
+      APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      SAYGM_BETA_VERSION: 0.1.0-beta.1
+      SAYGM_BUNDLE_NAME: SayGM
+      ELECTRON_ARCH: arm64
+    steps:
+      - name: Check out trusted beta source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify trusted ref and native Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REPOSITORY" = "taostat/saygm-desktop"
+          test "$GITHUB_REF" = "refs/heads/codex/signed-macos-beta"
+          case "$GITHUB_EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) echo "::error::Unexpected event for the trusted beta workflow."; exit 1 ;;
+          esac
+          test "$(uname -m)" = arm64
+          test "$APPLE_TEAM_ID" = V28B5X732P
+          printf 'runner_arch=%s\n' "$(uname -m)"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Install pnpm
+        run: npm install --global pnpm@10.30.3
+
+      - name: Set up native Apple Silicon Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+          rustup toolchain install 1.96.1 --profile default --target aarch64-apple-darwin
+          rustup default 1.96.1
+          rustup target add aarch64-apple-darwin
+          rustc -vV
+          cargo --version
+          test "$(node -p 'process.arch')" = arm64
+          rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: saygm-desktop-macos-arm64-default
+          cache-on-failure: true
+
+      - name: Install locked desktop dependencies
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck desktop sources
+        working-directory: ui/desktop
+        run: pnpm run typecheck
+
+      - name: Run desktop unit suite
+        working-directory: ui/desktop
+        run: pnpm run test:run
+
+      - name: Import Developer ID certificate into temporary keychain
+        id: apple-certificate
+        uses: ./.github/actions/apple-codesign
+        with:
+          certificate-base64: ${{ secrets.APPLE_CERTIFICATE_P12_BASE64 }}
+          certificate-password: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+          team-id: ${{ vars.APPLE_TEAM_ID }}
+
+      - name: Prepare notarization credentials
+        shell: bash
+        env:
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [[ -n "$APPLE_API_KEY_P8_BASE64" && -n "$APPLE_API_KEY_ID" && -n "$APPLE_API_ISSUER_ID" ]]; then
+            api_key_path="$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8"
+            printf '%s' "$APPLE_API_KEY_P8_BASE64" | base64 --decode > "$api_key_path"
+            chmod 600 "$api_key_path"
+            {
+              printf 'SAYGM_NOTARIZATION_METHOD=app-store-connect\n'
+              printf 'APPLE_API_KEY_PATH=%s\n' "$api_key_path"
+              printf 'APPLE_API_KEY_ID=%s\n' "$APPLE_API_KEY_ID"
+              printf 'APPLE_API_ISSUER_ID=%s\n' "$APPLE_API_ISSUER_ID"
+            } >> "$GITHUB_ENV"
+            echo "Prepared App Store Connect notarization key in RUNNER_TEMP."
+          elif [[ -n "$APPLE_ID" && -n "$APPLE_ID_PASSWORD" ]]; then
+            {
+              printf 'SAYGM_NOTARIZATION_METHOD=apple-id\n'
+              printf 'APPLE_ID=%s\n' "$APPLE_ID"
+              printf 'APPLE_ID_PASSWORD=%s\n' "$APPLE_ID_PASSWORD"
+            } >> "$GITHUB_ENV"
+            echo "Prepared Apple ID notarization credentials."
+          else
+            echo "::error::Configure the App Store Connect API key secrets or both Apple ID notarization secrets."
+            exit 1
+          fi
+
+      - name: Validate notarization credentials before compilation
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          if [[ "$SAYGM_NOTARIZATION_METHOD" = app-store-connect ]]; then
+            xcrun notarytool history \
+              --key "$APPLE_API_KEY_PATH" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER_ID" >/dev/null
+          else
+            xcrun notarytool history \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_ID_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" >/dev/null
+          fi
+          echo "Apple notarization credentials validated."
+
+      - name: Build native Goose backend
+        shell: bash
+        run: |
+          set -euo pipefail
+          cargo build --locked --release --target aarch64-apple-darwin -p goose-cli --bin goose
+          target/aarch64-apple-darwin/release/goose --version
+          mkdir -p ui/desktop/src/bin
+          cp target/aarch64-apple-darwin/release/goose ui/desktop/src/bin/goose
+          chmod 755 ui/desktop/src/bin/goose
+          test "$(lipo -archs target/aarch64-apple-darwin/release/goose)" = arm64
+          source_sha="$(shasum -a 256 target/aarch64-apple-darwin/release/goose | awk '{print $1}')"
+          copied_sha="$(shasum -a 256 ui/desktop/src/bin/goose | awk '{print $1}')"
+          test "$source_sha" = "$copied_sha"
+          printf 'SAYGM_MACOS_SOURCE_BACKEND_SHA256=%s\n' "$source_sha" >> "$GITHUB_ENV"
+
+      - name: Package, sign, and notarize app bundle
+        working-directory: ui/desktop
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.signing-identity }}
+          KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
+        run: pnpm run bundle:default
+
+      - name: Verify signed app, notarization, Gatekeeper, and native startup
+        shell: bash
+        timeout-minutes: 15
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.signing-identity }}
+          KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app_dir="ui/desktop/out/SayGM-darwin-arm64"
+          app="$app_dir/SayGM.app"
+          backend="$app/Contents/Resources/bin/goose"
+          report="artifacts/qa/qa-native-macos-arm64.json"
+          test -d "$app"
+          test -x "$backend"
+          test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$SAYGM_BETA_VERSION"
+
+          for code in "$app" "$backend"; do
+            codesign --verify --strict --verbose=2 "$code"
+            details="$(codesign --display --verbose=4 "$code" 2>&1)"
+            grep -F "Authority=$APPLE_SIGNING_IDENTITY" <<< "$details"
+            grep -F "TeamIdentifier=$APPLE_TEAM_ID" <<< "$details"
+            grep -E 'flags=.*\(runtime\)' <<< "$details"
+          done
+          codesign --verify --deep --strict --verbose=2 "$app"
+          if ! xcrun stapler validate -v "$app"; then
+            xcrun stapler staple -v "$app"
+            xcrun stapler validate -v "$app"
+          fi
+          spctl --assess --type execute --verbose=4 "$app"
+
+          backend_sha="$(shasum -a 256 "$backend" | awk '{print $1}')"
+          mkdir -p "$(dirname "$report")"
+          node scripts/qa-native-macos-arm64.mjs \
+            --app "$app/Contents/MacOS/SayGM" \
+            --backend "$backend" \
+            --expected-backend-sha256 "$backend_sha" \
+            --expected-version "$SAYGM_BETA_VERSION" \
+            --require-secure-storage true \
+            --report "$report"
+
+      - name: Create signed and notarized ZIP and DMG
+        shell: bash
+        env:
+          APPLE_SIGNING_IDENTITY: ${{ steps.apple-certificate.outputs.signing-identity }}
+          KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+          APPLE_API_KEY_P8_BASE64: ${{ secrets.APPLE_API_KEY_P8_BASE64 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+        run: |
+          set -euo pipefail
+          app_dir="ui/desktop/out/SayGM-darwin-arm64"
+          app="$app_dir/SayGM.app"
+          zip="artifacts/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.zip"
+          dmg="artifacts/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.dmg"
+          mkdir -p artifacts
+          rm -f "$app_dir/SayGM.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
+          hdiutil create -volname "SayGM Desktop" -srcfolder "$app" -ov -format UDZO "$dmg"
+          codesign --force --timestamp --keychain "$KEYCHAIN_PATH" --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
+          codesign --verify --strict --verbose=2 "$dmg"
+
+          if [[ "$SAYGM_NOTARIZATION_METHOD" = app-store-connect ]]; then
+            notary_json="$RUNNER_TEMP/saygm-beta-dmg-notarization.json"
+            xcrun notarytool submit "$dmg" \
+              --key "$APPLE_API_KEY_PATH" \
+              --key-id "$APPLE_API_KEY_ID" \
+              --issuer "$APPLE_API_ISSUER_ID" \
+              --wait --output-format json > "$notary_json"
+          else
+            notary_json="$RUNNER_TEMP/saygm-beta-dmg-notarization.json"
+            xcrun notarytool submit "$dmg" \
+              --apple-id "$APPLE_ID" \
+              --password "$APPLE_ID_PASSWORD" \
+              --team-id "$APPLE_TEAM_ID" \
+              --wait --output-format json > "$notary_json"
+          fi
+          node - "$notary_json" <<'NODE'
+          const fs = require('node:fs');
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          if (result.status !== 'Accepted') {
+            throw new Error(`DMG notarization was not accepted (status: ${result.status ?? 'missing'}).`);
+          }
+          console.log(`DMG notarization accepted; submission ${result.id ?? 'id unavailable'}.`);
+          NODE
+          node - "$notary_json" artifacts/notarization.json <<'NODE'
+          const fs = require('node:fs');
+          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+          fs.writeFileSync(process.argv[3], `${JSON.stringify({ status: result.status, submission_id: result.id ?? null, artifact: 'DMG' }, null, 2)}\n`);
+          NODE
+
+          xcrun stapler staple -v "$dmg"
+          xcrun stapler validate -v "$app"
+          xcrun stapler validate -v "$dmg"
+          spctl --assess --type execute --verbose=4 "$app"
+          spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
+          shasum -a 256 "$zip" "$dmg" > artifacts/SHA256SUMS.txt
+          codesign --verify --deep --strict --verbose=2 "$app"
+          node - artifacts/provenance.json \
+            "$app" "$app/Contents/Resources/bin/goose" "$zip" "$dmg" artifacts/qa/qa-native-macos-arm64.json artifacts/notarization.json <<'NODE'
+          const fs = require('node:fs');
+          const { createHash } = require('node:crypto');
+          const { execFileSync } = require('node:child_process');
+          const assert = require('node:assert/strict');
+          const hash = (filename) => createHash('sha256').update(fs.readFileSync(filename)).digest('hex');
+          const [output, app, backend, zip, dmg, report, notarization] = process.argv.slice(2);
+          const qa = JSON.parse(fs.readFileSync(report, 'utf8'));
+          const appExecutableSha256 = hash(`${app}/Contents/MacOS/SayGM`);
+          const asarSha256 = hash(`${app}/Contents/Resources/app.asar`);
+          const backendSha256 = hash(backend);
+          assert.match(process.env.SAYGM_MACOS_SOURCE_BACKEND_SHA256 ?? '', /^[a-f0-9]{64}$/, 'Native source backend hash is required.');
+          assert.equal(qa.result, 'passed', 'Native smoke must pass before artifact qualification.');
+          assert.equal(qa.secure_storage_available, true, 'Secure storage must be available in the signed candidate.');
+          assert.equal(qa.profile_cleanup, true, 'Native smoke must remove its owned profile.');
+          assert.equal(qa.app_sha256, appExecutableSha256, 'Smoke must have tested the exact app executable being archived.');
+          assert.equal(qa.asar_sha256, asarSha256, 'Smoke must have tested the exact ASAR being archived.');
+          assert.equal(qa.backend_sha256, backendSha256, 'Smoke must have tested the exact signed backend being archived.');
+          const provenance = {
+            source_revision: execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(),
+            beta_version: process.env.SAYGM_BETA_VERSION,
+            workflow_run_id: process.env.GITHUB_RUN_ID,
+            workflow_attempt: process.env.GITHUB_RUN_ATTEMPT,
+            runner_os: process.env.RUNNER_OS,
+            runner_arch: process.env.RUNNER_ARCH,
+            machine_arch: execFileSync('uname', ['-m'], { encoding: 'utf8' }).trim(),
+            rust_host: execFileSync('rustc', ['-vV'], { encoding: 'utf8' }).split('\n').find((line) => line.startsWith('host: '))?.slice(6),
+            node_version: process.version,
+            app_bundle_id: 'com.saygm.desktop',
+            app_version: execFileSync('plutil', ['-extract', 'CFBundleShortVersionString', 'raw', '-o', '-', `${app}/Contents/Info.plist`], { encoding: 'utf8' }).trim(),
+            apple_team_id: process.env.APPLE_TEAM_ID,
+            signing_identity: process.env.APPLE_SIGNING_IDENTITY,
+            notarization_method: process.env.SAYGM_NOTARIZATION_METHOD,
+            source_backend_sha256: process.env.SAYGM_MACOS_SOURCE_BACKEND_SHA256,
+            backend_pre_sign_sha256_verified: true,
+            packaged_signed_backend_sha256: backendSha256,
+            backend_provenance: 'Forge verified the copied backend against the recorded native release build hash after extra resources were copied. The packaged backend is independently codesign-verified for the expected Developer ID team.',
+            app_executable_sha256: appExecutableSha256,
+            app_asar_sha256: asarSha256,
+            zip_sha256: hash(zip),
+            dmg_sha256: hash(dmg),
+            notarization: JSON.parse(fs.readFileSync(notarization, 'utf8')),
+            native_smoke_report: report,
+            native_smoke_report_sha256: hash(report),
+            native_smoke_result: qa.result,
+            secure_storage_available: qa.secure_storage_available,
+            profile_cleanup: qa.profile_cleanup,
+            app_staple_validated: true,
+            dmg_staple_validated: true,
+            qualification: 'Private CI artifact only; no public release or external publication.',
+          };
+          fs.writeFileSync(output, `${JSON.stringify(provenance, null, 2)}\n`);
+          NODE
+
+      - name: Remove temporary Apple signing material
+        if: always()
+        shell: bash
+        env:
+          KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+        run: |
+          set -uo pipefail
+          cleanup_failed=0
+          keychain_path="${KEYCHAIN_PATH:-$RUNNER_TEMP/signing.keychain-db}"
+          if [[ -e "$keychain_path" ]]; then
+            security delete-keychain "$keychain_path" >/dev/null 2>&1 || cleanup_failed=1
+          fi
+          if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
+            rm -f "$APPLE_API_KEY_PATH" || cleanup_failed=1
+          elif [[ -n "$APPLE_API_KEY_ID" ]]; then
+            rm -f "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8" || cleanup_failed=1
+          fi
+          rm -f "$RUNNER_TEMP/certificate.p12" "$RUNNER_TEMP/signing.keychain-db" || cleanup_failed=1
+          [[ ! -e "$keychain_path" ]] || cleanup_failed=1
+          [[ ! -e "$RUNNER_TEMP/certificate.p12" ]] || cleanup_failed=1
+          if [[ -n "${APPLE_API_KEY_PATH:-}" ]]; then
+            [[ ! -e "$APPLE_API_KEY_PATH" ]] || cleanup_failed=1
+          elif [[ -n "$APPLE_API_KEY_ID" ]]; then
+            [[ ! -e "$RUNNER_TEMP/AuthKey_${APPLE_API_KEY_ID}.p8" ]] || cleanup_failed=1
+          fi
+          if [[ "$cleanup_failed" != 0 ]]; then
+            echo "::error::Temporary Apple signing material cleanup could not be verified."
+            exit 1
+          fi
+          echo "Temporary Apple signing material removed and absence verified."
+
+      - name: Upload native QA diagnostics
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-macos-arm64-beta1-qa-${{ github.sha }}
+          path: |
+            artifacts/qa/qa-native-macos-arm64.json
+            artifacts/qa/qa-native-macos-arm64.png
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload qualified private beta artifacts
+        if: success()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-macos-arm64-0.1.0-beta.1-${{ github.sha }}
+          path: |
+            artifacts/SayGM-0.1.0-beta.1-macos-arm64.zip
+            artifacts/SayGM-0.1.0-beta.1-macos-arm64.dmg
+            artifacts/SHA256SUMS.txt
+            artifacts/provenance.json
+            artifacts/notarization.json
+            artifacts/qa/qa-native-macos-arm64.json
+            artifacts/qa/qa-native-macos-arm64.png
+          if-no-files-found: error
+          retention-days: 14

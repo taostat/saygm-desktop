@@ -1,9 +1,11 @@
 const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
-const { rm } = require('node:fs/promises');
+const { createHash } = require('node:crypto');
+const { readFile, rm } = require('node:fs/promises');
 const { resolve } = require('path');
 
 const isLinuxVulkanBuild = process.env.GOOSE_DESKTOP_LINUX_VARIANT === 'vulkan';
+const betaVersion = process.env.SAYGM_BETA_VERSION;
 
 function removeBuildOnlyBinFiles(
   buildPath,
@@ -21,7 +23,24 @@ function removeBuildOnlyBinFiles(
     ['.gitkeep', 'node-launchers.test.ts'].map((name) =>
       rm(resolve(resourcesPath, 'bin', name), { force: true })
     )
-  ).then(() => callback(), callback);
+  ).then(async () => {
+    try {
+      const expectedBackendSha256 = process.env.SAYGM_MACOS_SOURCE_BACKEND_SHA256;
+      if (platform === 'darwin' && betaVersion && !expectedBackendSha256) {
+        throw new Error('Signed macOS beta packaging requires a recorded native backend hash.');
+      }
+      if (platform === 'darwin' && expectedBackendSha256) {
+        const packagedBackend = await readFile(resolve(resourcesPath, 'bin', 'goose'));
+        const actualBackendSha256 = createHash('sha256').update(packagedBackend).digest('hex');
+        if (actualBackendSha256 !== expectedBackendSha256) {
+          throw new Error('Packaged macOS backend does not match the native build output.');
+        }
+      }
+      callback();
+    } catch (error) {
+      callback(error);
+    }
+  }, callback);
 }
 
 let cfg = {
@@ -67,19 +86,56 @@ let cfg = {
   },
 };
 
+if (betaVersion) {
+  cfg.appVersion = betaVersion;
+}
+
 // macOS code signing and notarization via Electron Forge
 // Activated when APPLE_TEAM_ID is set (CI signing builds)
 if (process.env.APPLE_TEAM_ID) {
+  const signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
+  const keychain = process.env.KEYCHAIN_PATH;
+  if (!signingIdentity || !keychain) {
+    throw new Error('macOS signing requires an explicit identity and temporary keychain.');
+  }
+
   cfg.osxSign = {
-    keychain: process.env.KEYCHAIN_PATH || undefined,
-    entitlements: 'entitlements.plist',
-    'entitlements-inherit': 'entitlements.plist',
+    keychain,
+    identity: signingIdentity,
+    optionsForFile: (filePath) => ({
+      entitlements:
+        filePath.endsWith('.app') && !filePath.includes('.app/')
+          ? resolve(__dirname, 'entitlements.plist')
+          : resolve(__dirname, 'entitlements.inherit.plist'),
+      hardenedRuntime: true,
+    }),
   };
-  cfg.osxNotarize = {
-    appleId: process.env.APPLE_ID,
-    appleIdPassword: process.env.APPLE_ID_PASSWORD,
-    teamId: process.env.APPLE_TEAM_ID,
-  };
+
+  if (process.env.SAYGM_NOTARIZATION_METHOD === 'app-store-connect') {
+    if (
+      !process.env.APPLE_API_KEY_PATH ||
+      !process.env.APPLE_API_KEY_ID ||
+      !process.env.APPLE_API_ISSUER_ID
+    ) {
+      throw new Error('App Store Connect notarization requires a key file, key ID, and issuer ID.');
+    }
+    cfg.osxNotarize = {
+      appleApiKey: process.env.APPLE_API_KEY_PATH,
+      appleApiKeyId: process.env.APPLE_API_KEY_ID,
+      appleApiIssuer: process.env.APPLE_API_ISSUER_ID,
+    };
+  } else if (process.env.SAYGM_NOTARIZATION_METHOD === 'apple-id') {
+    if (!process.env.APPLE_ID || !process.env.APPLE_ID_PASSWORD) {
+      throw new Error('Apple ID notarization requires an Apple ID and app-specific password.');
+    }
+    cfg.osxNotarize = {
+      appleId: process.env.APPLE_ID,
+      appleIdPassword: process.env.APPLE_ID_PASSWORD,
+      teamId: process.env.APPLE_TEAM_ID,
+    };
+  } else {
+    throw new Error('A supported macOS notarization method must be configured.');
+  }
 }
 
 module.exports = {

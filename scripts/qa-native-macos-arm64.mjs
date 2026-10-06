@@ -5,7 +5,7 @@ import { createRequire } from 'node:module';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { execFileSync, spawn } from 'node:child_process';
+import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const repository = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -20,9 +20,13 @@ for (let index = 2; index < process.argv.length; index += 2) {
   );
   options[process.argv[index].slice(2)] = process.argv[index + 1];
 }
-for (const required of ['app', 'backend', 'source-backend', 'report']) {
+for (const required of ['app', 'backend', 'report']) {
   assert(options[required], `Missing --${required}`);
 }
+assert(
+  options['source-backend'] || options['expected-backend-sha256'],
+  'Provide --source-backend or --expected-backend-sha256'
+);
 assert.equal(process.platform, 'darwin', 'This smoke test must run on macOS');
 assert.equal(process.arch, 'arm64', 'This smoke test must run on native Apple Silicon');
 assert.equal(
@@ -33,15 +37,21 @@ assert.equal(
 
 const appPath = await fs.realpath(path.resolve(options.app));
 const backendPath = await fs.realpath(path.resolve(options.backend));
-const sourceBackendPath = await fs.realpath(path.resolve(options['source-backend']));
+const sourceBackendPath = options['source-backend']
+  ? await fs.realpath(path.resolve(options['source-backend']))
+  : null;
 const appBytes = await fs.readFile(appPath);
 const backendBytes = await fs.readFile(backendPath);
-const sourceBackendBytes = await fs.readFile(sourceBackendPath);
+const sourceBackendBytes = sourceBackendPath ? await fs.readFile(sourceBackendPath) : null;
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+const backendSha256 = sha256(backendBytes);
+const sourceBackendSha256 = sourceBackendBytes ? sha256(sourceBackendBytes) : null;
 assert.equal(
-  sha256(backendBytes),
-  sha256(sourceBackendBytes),
-  'Packaged backend must match the built source binary'
+  backendSha256,
+  sourceBackendSha256 ?? options['expected-backend-sha256'],
+  sourceBackendPath
+    ? 'Packaged backend must match the built source binary'
+    : 'Packaged backend must match the pinned native-build artifact hash'
 );
 
 function architectures(filename) {
@@ -81,10 +91,11 @@ assert(
 const reportPath = path.resolve(options.report);
 await fs.mkdir(path.dirname(reportPath), { recursive: true });
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-native-macos-'));
-const home = path.join(temporary, 'home');
+const runnerHome = path.resolve(process.env.HOME || os.homedir());
 const workingDirectory = path.join(temporary, 'work');
-const userData = path.join(home, 'Library', 'Application Support', 'SayGM');
-await fs.mkdir(home, { recursive: true });
+const expectedUserData = path.join(runnerHome, 'Library', 'Application Support', 'SayGM');
+let userDataDirectory = expectedUserData;
+let runnerProfileOwnedBySmoke = false;
 await fs.mkdir(workingDirectory, { recursive: true });
 
 const report = {
@@ -93,13 +104,15 @@ const report = {
   architecture: process.arch,
   expected_architecture: 'arm64',
   app_sha256: sha256(appBytes),
-  backend_sha256: sha256(backendBytes),
-  source_backend_sha256: sha256(sourceBackendBytes),
+  backend_sha256: backendSha256,
+  source_backend_sha256: sourceBackendSha256,
+  expected_backend_sha256: sourceBackendPath ? null : options['expected-backend-sha256'],
+  backend_comparison_source: sourceBackendPath ? 'native-build-output' : 'pinned-native-artifact',
   asar_sha256: sha256(await fs.readFile(archivePath)),
   app_architectures: architectures(appPath),
   backend_architectures: architectures(backendPath),
   boundary:
-    'Disposable GitHub macOS runner; isolated HOME and app data. No login, account/provider credential writes, inference, or payment. Secure-storage availability is observed; persistence is not tested. CDP is bound to loopback for this smoke test only.',
+    'Disposable GitHub macOS runner with its native HOME. The smoke refuses an existing SayGM app-data profile and removes only the profile created by this run. The backend working directory is temporary. No login, SayGM account/provider credential writes, inference, or payment. Secure-storage availability is observed; persistence is not tested. CDP is bound to loopback for this smoke test only.',
   process_cleanup: false,
   events: [],
 };
@@ -165,26 +178,415 @@ const childEnvironment = Object.fromEntries(
     .filter((name) => process.env[name] !== undefined)
     .map((name) => [name, process.env[name]])
 );
-childEnvironment.HOME = home;
-childEnvironment.APPDATA = path.join(home, 'Library', 'Application Support');
-childEnvironment.XDG_CONFIG_HOME = path.join(home, '.config');
 childEnvironment.ELECTRON_ENABLE_LOGGING = '1';
+
+async function ensureRunnerProfileIsAbsent() {
+  let existingProfile = null;
+  try {
+    existingProfile = await fs.lstat(expectedUserData);
+  } catch (error) {
+    if (error.code !== 'ENOENT') throw error;
+  }
+  assert.equal(
+    existingProfile,
+    null,
+    'Refusing to launch against a pre-existing SayGM app-data profile on the runner'
+  );
+}
+
+async function removeRunnerProfileCreatedBySmoke() {
+  if (!runnerProfileOwnedBySmoke) return;
+  assert.equal(userDataDirectory, expectedUserData, 'Refusing to remove an unexpected app-data path');
+  let profile;
+  try {
+    profile = await fs.lstat(expectedUserData);
+  } catch (error) {
+    if (error.code === 'ENOENT') return;
+    throw error;
+  }
+  assert(profile.isDirectory() && !profile.isSymbolicLink(), 'Runner SayGM profile is not a plain directory');
+  await fs.rm(expectedUserData, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
+}
 
 let active;
 function sanitizeDiagnostic(value) {
   return String(value)
+    .replaceAll(runnerHome, '[runner-home]')
     .replace(/https?:\/\/[^\s"'<>]+/gi, '[url]')
+    .replace(/file:\/\/[^\s"'<>]+/gi, '[local file]')
     .replace(/\bBearer\s+[^\s"']+/gi, 'Bearer [redacted]')
     .replace(/\b(access[_-]?token|refresh[_-]?token|api[_-]?key|password|secret)\b\s*[:=]\s*[^\s,;"']+/gi, '$1=[redacted]')
+    .replace(/\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b/gi, '[email]')
     .slice(0, 500);
 }
+function appendDiagnostic(entries, detail, maximum = 30) {
+  entries.push(detail);
+  if (entries.length > maximum) entries.splice(0, entries.length - maximum);
+}
+function resourceName(rawUrl) {
+  try {
+    return path.basename(decodeURIComponent(new URL(rawUrl).pathname)).slice(0, 160) || '[root]';
+  } catch {
+    return '[unknown]';
+  }
+}
+function observePage(page, instance) {
+  if (instance.observedPages.has(page)) return;
+  instance.observedPages.add(page);
+  instance.pages.push(page);
+  page.on('console', (message) => {
+    if (message.type() !== 'error' && message.type() !== 'warning') return;
+    appendDiagnostic(instance.rendererDiagnostics.console, {
+      type: message.type(),
+      text: sanitizeDiagnostic(message.text()),
+    });
+  });
+  page.on('pageerror', (error) => {
+    appendDiagnostic(
+      instance.rendererDiagnostics.pageErrors,
+      sanitizeDiagnostic(error.stack ?? error.message)
+    );
+  });
+  page.on('requestfailed', (request) => {
+    appendDiagnostic(instance.rendererDiagnostics.failedRequests, {
+      resource: resourceName(request.url()),
+      resource_type: request.resourceType(),
+      error: sanitizeDiagnostic(request.failure()?.errorText ?? 'unknown request failure'),
+    });
+  });
+  page.on('response', (response) => {
+    if (response.status() < 400 || response.request().resourceType() !== 'script') return;
+    appendDiagnostic(instance.rendererDiagnostics.failedScriptResponses, {
+      resource: resourceName(response.url()),
+      status: response.status(),
+    });
+  });
+}
+async function captureBackendStartup(instance) {
+  const diagnosticsDirectory = path.join(instance.userDataDirectory, 'logs', 'startup');
+  let names;
+  try {
+    names = (await fs.readdir(diagnosticsDirectory))
+      .filter((name) => name.startsWith('goose-serve-startup-') && name.endsWith('.json'))
+      .sort();
+  } catch {
+    return { directory_found: false, attempts: [] };
+  }
+  const attempts = [];
+  for (const name of names.slice(-5)) {
+    try {
+      const startup = JSON.parse(await fs.readFile(path.join(diagnosticsDirectory, name), 'utf8'));
+      attempts.push({
+        file: name,
+        binary_name: startup.binaryPath ? path.basename(startup.binaryPath) : null,
+        pid: startup.pid,
+        health_check_succeeded: startup.healthCheckSucceeded,
+        child_exit_code: startup.childExitCode,
+        child_exit_signal: startup.childExitSignal,
+        events: (startup.events ?? []).slice(-20).map((event) => ({
+          name: sanitizeDiagnostic(event.name),
+          elapsed_ms: event.elapsedMs,
+          at: event.at,
+        })),
+        stderr_tail: (startup.stderrTail ?? []).slice(-8).map(sanitizeDiagnostic),
+      });
+    } catch (error) {
+      attempts.push({ file: name, read_error: sanitizeDiagnostic(error.message) });
+    }
+  }
+  return { directory_found: true, attempts };
+}
+function captureMainProcessDiagnostics(instance) {
+  const pid = instance.child.pid;
+  if (!pid) return { attempted: false, reason: 'main PID unavailable' };
+
+  let processState;
+  try {
+    processState = execFileSync('ps', ['-p', String(pid), '-o', 'pid=,ppid=,state=,comm='], {
+      encoding: 'utf8',
+      timeout: 3000,
+    }).trim();
+  } catch (error) {
+    processState = sanitizeDiagnostic(error.message);
+  }
+
+  const sampled = spawnSync('/usr/bin/sample', [String(pid), '1', '1'], {
+    encoding: 'utf8',
+    timeout: 8000,
+    maxBuffer: 512 * 1024,
+  });
+  const sampleOutput = [sampled.stdout, sampled.stderr].filter(Boolean).join('\n');
+  const sampleLines = sampleOutput.split(/\r?\n/).filter(Boolean);
+  const sampleSummary = sampleLines.filter((line) =>
+    /^(Analysis of sampling|Process:|Path:|Identifier:|Version:|Code Type:|Parent Process:|Date\/Time:|OS Version:|Report Version:|Call graph:|Thread(?:\s|_)\d+)/.test(
+      line.trimStart()
+    ) || /^\s+(?:\+\s+)?\d+(?:\s|$)/.test(line)
+  );
+  return {
+    attempted: true,
+    process_state: processState.slice(0, 500),
+    sample_exit_status: sampled.status,
+    sample_signal: sampled.signal,
+    sample_error: sampled.error ? sanitizeDiagnostic(sampled.error.message) : null,
+    sample_lines: sampleSummary
+      .slice(0, 100)
+      .map((line) => sanitizeDiagnostic(line)),
+  };
+}
+async function captureRendererFailure(instance) {
+  const page = instance.page;
+  if (!page || page.isClosed()) return { page_available: false };
+  const captured = { page_available: true, screenshot_captured: false };
+
+  try {
+    const config = await withTimeout(
+      page.evaluate(() => {
+        const value = window.electron.getConfig();
+        return {
+          external_backend: Boolean(value?.GOOSE_EXTERNAL_BACKEND),
+          path_root: typeof value?.GOOSE_PATH_ROOT === 'string' ? value.GOOSE_PATH_ROOT : null,
+        };
+      }),
+      3000,
+      'failure preload config'
+    );
+    const resolvedPathRoot = config.path_root ? path.resolve(config.path_root) : null;
+    const configuredUserData = resolvedPathRoot ? path.dirname(resolvedPathRoot) : null;
+    const pathRootUnderRunnerHome = Boolean(
+      resolvedPathRoot && resolvedPathRoot.startsWith(`${runnerHome}${path.sep}`)
+    );
+    const pathRootMatchesExpected = resolvedPathRoot === path.join(expectedUserData, 'agent');
+    if (pathRootUnderRunnerHome && pathRootMatchesExpected) {
+      userDataDirectory = configuredUserData;
+      instance.userDataDirectory = configuredUserData;
+    }
+    captured.preload_config = {
+      state: 'resolved',
+      external_backend: config.external_backend,
+      path_root_present: Boolean(resolvedPathRoot),
+      path_root_under_runner_home: pathRootUnderRunnerHome,
+      path_root_matches_expected_agent_directory: pathRootMatchesExpected,
+      app_data_relative_to_runner_home: pathRootUnderRunnerHome
+        ? path.relative(runnerHome, configuredUserData)
+        : null,
+    };
+  } catch (error) {
+    captured.preload_config = {
+      state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+      error: sanitizeDiagnostic(error.message),
+    };
+  }
+
+  captured.main_process_diagnostics = captureMainProcessDiagnostics(instance);
+
+  try {
+    await withTimeout(
+      page.screenshot({ path: report.screenshot_path, timeout: 5000 }),
+      6000,
+      'failure screenshot'
+    );
+    captured.screenshot_captured = true;
+  } catch (error) {
+    captured.screenshot_error = sanitizeDiagnostic(error.message);
+  }
+  try {
+    captured.page = await withTimeout(
+      page.evaluate(() => {
+        const safeAssetName = (value) => {
+          try {
+            return new URL(value, location.href).pathname.split('/').filter(Boolean).at(-1) ?? '[root]';
+          } catch {
+            return '[unknown]';
+          }
+        };
+        const visible = (element) => element.getClientRects().length > 0;
+        const root = document.getElementById('root');
+        const resources = performance.getEntriesByType('resource').slice(-30);
+        return {
+          title: document.title,
+          ready_state: document.readyState,
+          page_name: safeAssetName(location.href),
+          body_text: document.body?.innerText.replace(/\s+/g, ' ').trim().slice(0, 1800) ?? '',
+          visible_headings: Array.from(document.querySelectorAll('h1, h2, h3'))
+            .filter(visible)
+            .map((heading) => heading.innerText.trim().slice(0, 160))
+            .slice(0, 20),
+          visible_status_text: Array.from(document.querySelectorAll('[role="status"]'))
+            .filter(visible)
+            .map((element) => element.innerText.trim().slice(0, 200))
+            .slice(0, 10),
+          root_present: Boolean(root),
+          root_child_count: root?.childElementCount ?? 0,
+          root_text: root?.innerText.replace(/\s+/g, ' ').trim().slice(0, 1200) ?? '',
+          scripts: Array.from(document.querySelectorAll('script[src]'))
+            .map((script) => safeAssetName(script.src))
+            .slice(0, 30),
+          recent_resources: resources.map((resource) => ({
+            name: safeAssetName(resource.name),
+            initiator: resource.initiatorType,
+            duration_ms: Math.round(resource.duration),
+            transfer_size: resource.transferSize,
+            decoded_size: resource.decodedBodySize,
+          })),
+        };
+      }),
+      6000,
+      'failure renderer snapshot'
+    );
+  } catch (error) {
+    captured.page_snapshot_error = sanitizeDiagnostic(error.message);
+  }
+  captured.ipc = {};
+  let loopbackAcpUrl = null;
+  const probes = [
+    [
+      'account_status',
+      () => page.evaluate(() => window.electron.gmAccount.getStatus()),
+      (value) => ({
+        connected: Boolean(value?.connected),
+        provider_configured: Boolean(value?.providerConfigured),
+        secure_storage_available: Boolean(value?.secureStorageAvailable),
+      }),
+    ],
+    [
+      'acp_url',
+      () => page.evaluate(() => window.electron.getAcpUrl()),
+      (value) => {
+        if (typeof value !== 'string') return { available: false };
+        try {
+          const endpoint = new URL(value);
+          const loopback = endpoint.protocol === 'wss:' && endpoint.hostname === '127.0.0.1';
+          if (loopback) loopbackAcpUrl = value;
+          return {
+            available: true,
+            protocol: endpoint.protocol,
+            loopback,
+            port_present: Boolean(endpoint.port),
+          };
+        } catch {
+          return { available: false, invalid: true };
+        }
+      },
+    ],
+  ];
+  for (const [name, operation, project] of probes) {
+    const startedAt = Date.now();
+    try {
+      const value = await withTimeout(operation(), 4000, `failure ${name} IPC`);
+      captured.ipc[name] = {
+        state: 'resolved',
+        elapsed_ms: Date.now() - startedAt,
+        value: project(value),
+      };
+    } catch (error) {
+      captured.ipc[name] = {
+        state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+        elapsed_ms: Date.now() - startedAt,
+        error: sanitizeDiagnostic(error.message),
+      };
+    }
+  }
+  if (!loopbackAcpUrl) {
+    captured.local_acp_probe = { state: 'skipped', reason: 'local loopback ACP URL unavailable' };
+  } else {
+    try {
+      captured.local_acp_probe = await withTimeout(
+        page.evaluate(async (url) => {
+          const socket = new WebSocket(url);
+          const pending = new Map();
+          let sequence = 0;
+          socket.addEventListener('message', (event) => {
+            let response;
+            try {
+              response = JSON.parse(event.data);
+            } catch {
+              return;
+            }
+            if (response.id !== undefined && pending.has(response.id)) {
+              const callbacks = pending.get(response.id);
+              pending.delete(response.id);
+              clearTimeout(callbacks.timeout);
+              response.error
+                ? callbacks.reject(new Error(`ACP request failed: ${response.error.code}`))
+                : callbacks.resolve(response.result);
+            } else if (response.method && response.id !== undefined) {
+              socket.send(JSON.stringify({
+                jsonrpc: '2.0',
+                id: response.id,
+                error: { code: -32601, message: 'Diagnostic client does not handle interactive requests' },
+              }));
+            }
+          });
+          const request = (method, params) => {
+            const id = ++sequence;
+            return new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => {
+                pending.delete(id);
+                reject(new Error(`ACP request timeout: ${method}`));
+              }, 7000);
+              pending.set(id, { resolve, reject, timeout });
+              socket.send(JSON.stringify({ jsonrpc: '2.0', id, method, params }));
+            });
+          };
+          try {
+            await new Promise((resolve, reject) => {
+              const timeout = setTimeout(() => reject(new Error('ACP socket open timed out')), 7000);
+              socket.addEventListener('open', () => { clearTimeout(timeout); resolve(); }, { once: true });
+              socket.addEventListener('error', () => {
+                clearTimeout(timeout);
+                reject(new Error('Local ACP socket failed to open'));
+              }, { once: true });
+            });
+            const initialized = await request('initialize', {
+              protocolVersion: 1,
+              clientCapabilities: {},
+              clientInfo: { name: 'SayGM macOS diagnostic', version: '1' },
+            });
+            const providers = await request('_goose/unstable/providers/list', {});
+            return {
+              state: 'resolved',
+              protocol_version: initialized?.protocolVersion ?? null,
+              provider_ids: Array.isArray(providers?.entries)
+                ? providers.entries.map((entry) => entry.providerId).filter((value) => typeof value === 'string')
+                : [],
+            };
+          } finally {
+            for (const callbacks of pending.values()) clearTimeout(callbacks.timeout);
+            pending.clear();
+            if (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING) {
+              socket.close();
+            }
+          }
+        }, loopbackAcpUrl),
+        18000,
+        'failure local ACP probe'
+      );
+    } catch (error) {
+      captured.local_acp_probe = {
+        state: error.message.includes('timed out') ? 'timeout' : 'rejected',
+        error: sanitizeDiagnostic(error.message),
+      };
+    }
+  }
+  return captured;
+}
 async function start() {
+  await setPhase('verify-runner-profile-is-absent');
+  await ensureRunnerProfileIsAbsent();
+  await note('Runner-native SayGM app-data profile was absent before launch');
   await setPhase('reserve-loopback-debug-port');
   const port = await freePort();
-  await setPhase('launch-packaged-app-with-isolated-home');
+  await setPhase('launch-packaged-app-with-native-home');
+  runnerProfileOwnedBySmoke = true;
   const child = spawn(
     appPath,
-    ['--remote-debugging-address=127.0.0.1', `--remote-debugging-port=${port}`, '--disable-gpu'],
+    [
+      '--dir',
+      workingDirectory,
+      '--remote-debugging-address=127.0.0.1',
+      `--remote-debugging-port=${port}`,
+      '--disable-gpu',
+    ],
     {
       cwd: workingDirectory,
       env: childEnvironment,
@@ -196,6 +598,15 @@ async function start() {
     child,
     browser: null,
     page: null,
+    pages: [],
+    observedPages: new Set(),
+    userDataDirectory,
+    rendererDiagnostics: {
+      console: [],
+      pageErrors: [],
+      failedRequests: [],
+      failedScriptResponses: [],
+    },
     backendPid: null,
     outputBytes: 0,
     diagnosticLines: [],
@@ -237,9 +648,14 @@ async function start() {
     }
   }
   assert(instance.browser, 'Packaged app CDP endpoint did not become ready');
+  for (const context of instance.browser.contexts()) {
+    context.on('page', (candidate) => observePage(candidate, instance));
+    for (const candidate of context.pages()) observePage(candidate, instance);
+  }
   while (Date.now() < deadline) {
     for (const context of instance.browser.contexts()) {
       for (const candidate of context.pages()) {
+        observePage(candidate, instance);
         try {
           if (await withTimeout(
             candidate.evaluate(() => Boolean(window.electron?.gmAccount && document.body.innerText.trim())),
@@ -284,16 +700,24 @@ async function start() {
   })), 10000, 'renderer config IPC');
   assert.equal(details.platform, 'darwin');
   assert.equal(details.arch, 'arm64');
-  assert.equal(details.version, '0.1.0-rc.5');
-  assert.equal(path.resolve(details.config.GOOSE_PATH_ROOT), path.join(userData, 'agent'));
+  assert.equal(details.version, options['expected-version'] ?? '0.1.0-rc.5');
+  assert.equal(path.resolve(details.config.GOOSE_PATH_ROOT), path.join(userDataDirectory, 'agent'));
   assert.equal(details.config.GOOSE_EXTERNAL_BACKEND, false, 'Smoke test must use the packaged local backend');
   await setPhase('read-fresh-account-status');
   const status = await withTimeout(instance.page.evaluate(() => window.electron.gmAccount.getStatus()), 10000, 'account status IPC');
   assert.equal(status.connected, false, 'Fresh profile must not contain a SayGM account');
   report.secure_storage_available = Boolean(status.secureStorageAvailable);
+  await persistReport();
+  if (options['require-secure-storage'] === 'true') {
+    assert.equal(
+      report.secure_storage_available,
+      true,
+      'Signed macOS beta must report Electron secureStorage as available on first launch'
+    );
+  }
   await setPhase('read-local-acp-endpoint');
   const acpUrl = await withTimeout(instance.page.evaluate(() => window.electron.getAcpUrl()), 10000, 'local ACP endpoint IPC');
-  const startupDirectory = path.join(userData, 'logs', 'startup');
+  const startupDirectory = path.join(userDataDirectory, 'logs', 'startup');
   const startupFiles = (await fs.readdir(startupDirectory))
     .filter((name) => name.startsWith('goose-serve-startup-') && name.endsWith('.json'))
     .sort();
@@ -477,6 +901,37 @@ try {
   report.failure_phase = report.current_phase;
   report.error = sanitizeDiagnostic(error.message);
   if (active) {
+    report.failure_diagnostics_at = new Date().toISOString();
+    try {
+      report.failure_renderer = await captureRendererFailure(active);
+      for (const field of ['title', 'body_text', 'root_text']) {
+        if (report.failure_renderer.page?.[field]) {
+          report.failure_renderer.page[field] = sanitizeDiagnostic(report.failure_renderer.page[field]);
+        }
+      }
+      if (report.failure_renderer.page?.visible_headings) {
+        report.failure_renderer.page.visible_headings = report.failure_renderer.page.visible_headings
+          .map(sanitizeDiagnostic);
+      }
+      if (report.failure_renderer.page?.visible_status_text) {
+        report.failure_renderer.page.visible_status_text = report.failure_renderer.page.visible_status_text
+          .map(sanitizeDiagnostic);
+      }
+      if (report.failure_renderer.ipc) {
+        for (const probe of Object.values(report.failure_renderer.ipc)) {
+          if (probe?.error) probe.error = sanitizeDiagnostic(probe.error);
+        }
+      }
+    } catch (diagnosticError) {
+      report.failure_renderer = { capture_error: sanitizeDiagnostic(diagnosticError.message) };
+    }
+    report.renderer_diagnostics = active.rendererDiagnostics;
+    report.backend_startup_snapshot = await captureBackendStartup(active);
+    const latestBackendPid = report.backend_startup_snapshot.attempts
+      ?.slice()
+      .reverse()
+      .find((attempt) => Number.isInteger(attempt.pid) && attempt.pid > 0)?.pid;
+    if (latestBackendPid) active.backendPid = latestBackendPid;
     if (active.carry && /error|warn|failed|exception|panic|ready|health|startup|secure.?storage|keychain/i.test(active.carry)) {
       active.diagnosticLines.push(sanitizeDiagnostic(active.carry));
     }
@@ -496,6 +951,7 @@ try {
   }
   if (report.process_cleanup) {
     try {
+      await removeRunnerProfileCreatedBySmoke();
       await fs.rm(temporary, { recursive: true, force: true, maxRetries: 10, retryDelay: 150 });
       report.profile_cleanup = true;
     } catch (error) {

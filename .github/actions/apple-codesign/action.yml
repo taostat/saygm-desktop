@@ -8,11 +8,17 @@ inputs:
   certificate-password:
     description: 'Password for the .p12 certificate'
     required: true
+  team-id:
+    description: 'Apple Developer Team ID that owns the Developer ID certificate'
+    required: true
 
 outputs:
   keychain-path:
     description: 'Path to the temporary keychain'
     value: ${{ steps.import-cert.outputs.keychain-path }}
+  signing-identity:
+    description: 'Explicit Developer ID Application identity imported from the certificate'
+    value: ${{ steps.import-cert.outputs.signing-identity }}
 
 runs:
   using: 'composite'
@@ -23,14 +29,21 @@ runs:
       env:
         APPLE_CERTIFICATE_BASE64: ${{ inputs.certificate-base64 }}
         APPLE_CERTIFICATE_PASSWORD: ${{ inputs.certificate-password }}
+        APPLE_TEAM_ID: ${{ inputs.team-id }}
       run: |
-        set -e
+        set -euo pipefail
+        umask 077
 
         CERTIFICATE_PATH="$RUNNER_TEMP/certificate.p12"
         KEYCHAIN_PATH="$RUNNER_TEMP/signing.keychain-db"
         KEYCHAIN_PASSWORD="$(openssl rand -hex 16)"
+        trap 'rm -f "$CERTIFICATE_PATH"' EXIT
 
-        echo "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+        : "${APPLE_CERTIFICATE_BASE64:?APPLE_CERTIFICATE_P12_BASE64 is required}"
+        : "${APPLE_CERTIFICATE_PASSWORD:?APPLE_CERTIFICATE_PASSWORD is required}"
+        : "${APPLE_TEAM_ID:?APPLE_TEAM_ID is required}"
+        printf '%s' "$APPLE_CERTIFICATE_BASE64" | base64 --decode > "$CERTIFICATE_PATH"
+        printf 'KEYCHAIN_PATH=%s\n' "$KEYCHAIN_PATH" >> "$GITHUB_ENV"
 
         security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
         security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
@@ -43,11 +56,20 @@ runs:
 
         security set-key-partition-list \
           -S apple-tool:,apple: \
-          -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" >/dev/null
 
-        security list-keychains -d user -s "$KEYCHAIN_PATH" login.keychain-db
+        identities="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" \
+          | sed -nE 's/^[[:space:]]*[0-9]+\) [A-Fa-f0-9]{40} "([^"]+)"$/\1/p' \
+          | grep '^Developer ID Application:' \
+          | grep -F "($APPLE_TEAM_ID)" || true)"
+        identity_count="$(printf '%s\n' "$identities" | awk 'NF { count++ } END { print count + 0 }')"
+        if [[ "$identity_count" != 1 ]]; then
+          echo "::error::Expected exactly one Developer ID Application identity for the configured Apple team."
+          exit 1
+        fi
+        SIGNING_IDENTITY="$identities"
 
-        echo "keychain-path=$KEYCHAIN_PATH" >> "$GITHUB_OUTPUT"
-        echo "KEYCHAIN_PATH=$KEYCHAIN_PATH" >> "$GITHUB_ENV"
-
-        rm -f "$CERTIFICATE_PATH"
+        {
+          printf 'keychain-path=%s\n' "$KEYCHAIN_PATH"
+          printf 'signing-identity=%s\n' "$SIGNING_IDENTITY"
+        } >> "$GITHUB_OUTPUT"
