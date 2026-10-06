@@ -317,8 +317,10 @@ jobs:
           if (-not (Test-Path $installer)) { throw "Unsigned installer is missing." }
           if (-not (Test-Path $portable)) { throw "Portable Windows x64 ZIP is missing." }
           $installerVersion = (Get-Item -Path $installer).VersionInfo
-          if ($installerVersion.FileVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer file version: $($installerVersion.FileVersion)." }
-          if ($installerVersion.ProductVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer product version: $($installerVersion.ProductVersion)." }
+          $installerFileVersion = $installerVersion.FileVersion.Trim()
+          $installerProductVersion = $installerVersion.ProductVersion.Trim()
+          if ($installerFileVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer file version: $installerFileVersion." }
+          if ($installerProductVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer product version: $installerProductVersion." }
           if ($installerVersion.FileMajorPart -ne 0 -or $installerVersion.FileMinorPart -ne 1 -or $installerVersion.FileBuildPart -ne 0 -or $installerVersion.FilePrivatePart -ne 1) {
             throw "Installer binary file version is not the expected numeric 0.1.0.1: $($installerVersion.FileVersion)."
           }
