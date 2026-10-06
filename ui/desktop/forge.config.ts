@@ -78,6 +78,9 @@ let cfg = {
     rfc3161TimeStampServer: 'http://timestamp.digicert.com',
     signWithParams: '/fd sha256 /tr http://timestamp.digicert.com /td sha256',
   },
+  win32metadata: {
+    CompanyName: 'SayGM',
+  },
   // Protocol registration
   protocols: [
     {
