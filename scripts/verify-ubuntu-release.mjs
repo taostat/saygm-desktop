@@ -77,6 +77,7 @@ try {
   const zipAsarEntry = zipEntries.find((filename) => filename.endsWith('/resources/app.asar'));
   const zipBackendEntry = zipEntries.find((filename) => filename.endsWith('/resources/bin/goose'));
   assert(debAsar && zipAppEntry && zipAsarEntry && zipBackendEntry, 'Debian and ZIP packages must include app ASAR and Goose backend');
+  execFileSync('unzip', ['-tqq', args.zip]);
   execFileSync('unzip', ['-q', args.zip, zipAppEntry, zipAsarEntry, zipBackendEntry, '-d', zipRoot]);
   const zipApp = path.join(zipRoot, zipAppEntry);
   const zipAsar = path.join(zipRoot, zipAsarEntry);
