@@ -1,18 +1,24 @@
+<p align="center">
+  <img src="ui/desktop/src/images/saygm-mark.svg" alt="SayGM" width="64" />
+</p>
+
 # SayGM Desktop
 
-SayGM Desktop is the SayGM client built on Goose, with browser OAuth sign-in, account balance, model selection, and customer guardrail controls.
+SayGM Desktop brings the Goose desktop agent to your SayGM account. Sign in, choose supported SayGM models, check your balance, and manage local tool approvals and SayGM guardrail controls.
 
-This private repository contains the reviewed RC5 source and platform release automation. The original upstream license and notices are retained. See [source provenance](SAYGM_BUILD_PROVENANCE.md) and the [upstream README](UPSTREAM_README.md).
+It is a private, product-specific distribution of [Goose](https://github.com/aaif-goose/goose). Goose's Apache License 2.0 and upstream notices are retained in this repository. See [source provenance](SAYGM_BUILD_PROVENANCE.md) and the [upstream README](UPSTREAM_README.md).
 
-## Internal releases
+## Downloads
 
-Current version: `0.1.0-rc.5`.
+Latest release: `0.1.0-beta.1`.
 
-- macOS Apple Silicon: internal ZIP and DMG; ad hoc signed and not notarized.
-- Ubuntu x64 and ARM64: native backend and Debian package workflows.
-- Windows x64: native backend, portable package, and installer workflow.
+| Platform | Availability |
+| --- | --- |
+| macOS Apple Silicon | Published; signed and notarized. |
+| Windows x64 | Beta rebuild in progress. |
+| Ubuntu x64 and ARM64 | Beta rebuilds in progress. |
 
-Every new Windows and Ubuntu artifact must pass its native build and package checks before being marked ready. Source changes do not update existing release downloads. macOS Developer ID signing and notarization remain pending certificate setup.
+Download available assets from the [GitHub Releases page](https://github.com/taostat/saygm-desktop/releases). The repository is private, so viewing or downloading releases requires access to `taostat/saygm-desktop`. Windows and Ubuntu beta builds will appear there after they are complete and published.
 
 ## Development
 
@@ -26,11 +32,6 @@ pnpm run typecheck
 pnpm test:run
 ```
 
-The backend lives in `crates/`; the desktop lives in `ui/desktop/`. The local environment, credential stores, ignored binaries, build outputs, and design drafts are excluded from the imported source snapshot.
+The backend lives in `crates/`; the desktop lives in `ui/desktop/`. Production account API: `https://account.saygm.com/v1`. Inference API: `https://api.saygm.com/v1`.
 
-Production account API: `https://account.saygm.com/v1`.
-Inference API: `https://api.saygm.com/v1`.
-
-For upstream updates and downstream architecture, see [Maintaining Goose](maintenance/UPSTREAM.md).
-
-Keep internal artifacts and signing credentials in private storage. Release workflows upload internal build artifacts; they do not publish to the public Goose repository.
+For Goose updates and downstream architecture, see [Maintaining Goose](maintenance/UPSTREAM.md). This repository retains Goose's license and notices; its private release workflows publish SayGM builds only and do not publish to the upstream Goose repository.
