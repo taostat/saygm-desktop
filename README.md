@@ -15,10 +15,10 @@ Latest release: `0.1.0-beta.1`.
 | Platform | Availability |
 | --- | --- |
 | macOS Apple Silicon | Published; signed and notarized. |
-| Windows x64 | Beta rebuild in progress. |
-| Ubuntu x64 and ARM64 | Beta rebuilds in progress. |
+| Windows x64 | Published; unsigned. |
+| Ubuntu x64 and ARM64 | Published. |
 
-Download available assets from the [GitHub Releases page](https://github.com/taostat/saygm-desktop/releases). The repository is private, so viewing or downloading releases requires access to `taostat/saygm-desktop`. Windows and Ubuntu beta builds will appear there after they are complete and published.
+Download available assets from the [GitHub Releases page](https://github.com/taostat/saygm-desktop/releases). The repository is private, so viewing or downloading releases requires access to `taostat/saygm-desktop`.
 
 ## Development
 
