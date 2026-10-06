@@ -184,6 +184,11 @@ rebuilt_deb="$work_dir/rebuilt.deb"
 dpkg-deb --build --root-owner-group "$package_root" "$rebuilt_deb" >/dev/null
 mv "$rebuilt_deb" "$final_deb"
 
+# Free the expanded .deb tree and Forge's source archives before package QA.
+rm -rf "$work_dir" "$build_out"
+work_dir=""
+build_out=""
+
 node "$repo_root/scripts/verify-ubuntu-release.mjs" \
   --deb "$final_deb" \
   --zip "$final_zip" \

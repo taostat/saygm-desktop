@@ -42,7 +42,6 @@ try {
   await fs.mkdir(packageRoot);
   await fs.mkdir(zipRoot);
   execFileSync('dpkg-deb', ['-x', args.deb, packageRoot]);
-  execFileSync('unzip', ['-q', args.zip, '-d', zipRoot]);
 
   const walk = async (root) => {
     const results = [];
@@ -72,18 +71,17 @@ try {
   assert((await fs.stat(debApp)).isFile());
   assert((await fs.stat(debBackend)).isFile());
 
-  const zipFiles = await walk(zipRoot);
   const debAsar = debFiles.find((filename) => filename.endsWith('/resources/app.asar'));
-  const zipAsar = zipFiles.find((filename) => filename.endsWith('/resources/app.asar'));
-  const zipBackend = zipFiles.find((filename) => filename.endsWith('/resources/bin/goose'));
-  let zipApp;
-  for (const filename of zipFiles) {
-    if (!/\/SayGM$/.test(filename)) continue;
-    try {
-      if ((await fs.stat(filename)).isFile()) { zipApp = filename; break; }
-    } catch { /* Not an app executable. */ }
-  }
-  assert(debAsar && zipAsar && zipBackend && zipApp, 'Debian and ZIP packages must include app ASAR and Goose backend');
+  const zipEntries = output(['unzip', '-Z1', args.zip]).split(String.fromCharCode(10)).filter(Boolean);
+  const zipAppEntry = zipEntries.find((filename) => /\/SayGM$/.test(filename));
+  const zipAsarEntry = zipEntries.find((filename) => filename.endsWith('/resources/app.asar'));
+  const zipBackendEntry = zipEntries.find((filename) => filename.endsWith('/resources/bin/goose'));
+  assert(debAsar && zipAppEntry && zipAsarEntry && zipBackendEntry, 'Debian and ZIP packages must include app ASAR and Goose backend');
+  execFileSync('unzip', ['-q', args.zip, zipAppEntry, zipAsarEntry, zipBackendEntry, '-d', zipRoot]);
+  const zipApp = path.join(zipRoot, zipAppEntry);
+  const zipAsar = path.join(zipRoot, zipAsarEntry);
+  const zipBackend = path.join(zipRoot, zipBackendEntry);
+  for (const filename of [zipApp, zipAsar, zipBackend]) assert((await fs.stat(filename)).isFile());
   const debAppPackage = JSON.parse(asar.extractFile(debAsar, 'package.json').toString());
   const zipAppPackage = JSON.parse(asar.extractFile(zipAsar, 'package.json').toString());
   assert.equal(debAppPackage.version, expectedVersion, 'Debian ASAR package.json must have the expected beta version');
