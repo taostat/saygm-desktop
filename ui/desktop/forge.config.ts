@@ -102,6 +102,7 @@ if (process.env.APPLE_TEAM_ID) {
   cfg.osxSign = {
     keychain,
     identity: signingIdentity,
+    continueOnError: false,
     optionsForFile: (filePath) => ({
       entitlements:
         filePath.endsWith('.app') && !filePath.includes('.app/')
