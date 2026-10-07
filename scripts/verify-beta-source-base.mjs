@@ -12,6 +12,8 @@ git('merge-base', '--is-ancestor', sourceRevision, automationRevision);
 const allowedBuildAutomationChanges = new Set([
   '.github/workflows/build-ubuntu.yml',
   '.github/workflows/build-windows.yml',
+  '.github/workflows/build-ubuntu-beta2.yml',
+  '.github/workflows/build-windows-beta2.yml',
   'scripts/build-ubuntu-release.sh',
   'scripts/qa-native-desktop.mjs',
   'scripts/verify-beta-source-base.mjs',

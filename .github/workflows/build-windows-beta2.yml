@@ -1,0 +1,493 @@
+name: Build SayGM Desktop for Windows beta.2
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: saygm-desktop-windows-beta2-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  desktop-windows-tests:
+    if: github.repository == 'taostat/saygm-desktop' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cross-platform-beta2'
+    name: Native Windows npx, typecheck, and desktop unit tests
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Verify trusted private beta ref
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_REPOSITORY -ne "taostat/saygm-desktop" -or $env:GITHUB_REF -ne "refs/heads/codex/cross-platform-beta2" -or $env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
+            throw "This workflow only accepts manual dispatch from the trusted private beta2 branch."
+          }
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Install pnpm
+        shell: pwsh
+        run: npm install --global pnpm@10.30.3
+
+      - name: Install locked desktop dependencies
+        shell: pwsh
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Run native Windows npx wrapper tests
+        shell: pwsh
+        working-directory: ui/desktop
+        run: pnpm exec vitest run src/platform/windows/npx.test.ts
+
+      - name: Typecheck the desktop
+        shell: pwsh
+        working-directory: ui/desktop
+        run: pnpm run typecheck
+
+      - name: Run the full desktop unit suite
+        shell: pwsh
+        working-directory: ui/desktop
+        run: pnpm run test:run
+
+  build-windows-x64:
+    if: github.repository == 'taostat/saygm-desktop' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cross-platform-beta2'
+    name: Native Windows x64 beta.2 build, installer, and smoke checks
+    runs-on: windows-latest
+    needs: desktop-windows-tests
+    timeout-minutes: 120
+    env:
+      SAYGM_BETA_VERSION: 0.1.0-beta.2
+      SAYGM_PRODUCT_SOURCE_SHA: c7820ce263a68807cfb70d3460aa464702eec164
+    steps:
+      - name: Check out source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.10.0
+
+      - name: Verify product source matches the approved Mac beta.2
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          node scripts/verify-beta-source-base.mjs $env:SAYGM_PRODUCT_SOURCE_SHA |
+            Set-Content (Join-Path $out "source-verification.json") -Encoding utf8
+          if ($LASTEXITCODE -ne 0) { throw "Product source verification failed ($LASTEXITCODE)." }
+
+      - name: Install pnpm
+        shell: pwsh
+        run: npm install --global pnpm@10.30.3
+
+      - name: Set up native MSVC Rust toolchain
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          rustup toolchain install 1.96.1 --profile default --target x86_64-pc-windows-msvc
+          rustup default 1.96.1
+          rustup show
+          rustup target add x86_64-pc-windows-msvc
+          rustc --version --verbose
+          cargo --version
+
+      - name: Activate native MSVC build tools
+        uses: ilammy/msvc-dev-cmd@0b201ec74fa43914dc39ae48a89fd1d8cb592756 # v1.13.0
+        with:
+          arch: amd64
+
+      - name: Verify native MSVC compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          where.exe cl
+          if ($LASTEXITCODE -ne 0) { throw "MSVC compiler was not found." }
+          where.exe dumpbin
+          if ($LASTEXITCODE -ne 0) { throw "dumpbin was not found." }
+
+      - name: Cache Rust build outputs
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: saygm-desktop-windows-msvc-x64
+          cache-on-failure: true
+
+      - name: Build Goose backend for Windows x64
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          cargo build --locked --release --target x86_64-pc-windows-msvc -p goose-cli --bin goose
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows Goose build failed ($LASTEXITCODE)." }
+          $backend = Resolve-Path "target/x86_64-pc-windows-msvc/release/goose.exe"
+          & $backend --version
+          if ($LASTEXITCODE -ne 0) { throw "Native Windows Goose version check failed ($LASTEXITCODE)." }
+
+      - name: Prepare native desktop build
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $binDir = "ui/desktop/src/bin"
+          Remove-Item $binDir -Recurse -Force -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Path $binDir -Force | Out-Null
+          Copy-Item "target/x86_64-pc-windows-msvc/release/goose.exe" "$binDir/goose.exe"
+          Get-ChildItem "target/x86_64-pc-windows-msvc/release" -Filter "*.dll" -File -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName $binDir
+          }
+          if (-not (Test-Path "$binDir/goose.exe")) { throw "Native backend was not copied into the desktop bundle." }
+
+          $requiredRuntime = @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")
+          $runtimeSource = $null
+          if ($env:VCToolsRedistDir) {
+            $activeDesktopX64 = Join-Path $env:VCToolsRedistDir "x64"
+            if (Test-Path $activeDesktopX64) {
+              $activeRuntimeDirectories = @(Get-ChildItem -Path $activeDesktopX64 -Directory -ErrorAction SilentlyContinue |
+                Where-Object { $_.Name -like "Microsoft.VC*.CRT" })
+              foreach ($directory in $activeRuntimeDirectories) {
+                if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
+                  $runtimeSource = $directory.FullName
+                  break
+                }
+              }
+            }
+          }
+          if (-not $runtimeSource -and $env:VCINSTALLDIR) {
+            $fallbackRoot = Join-Path $env:VCINSTALLDIR "Redist/MSVC"
+            if (Test-Path $fallbackRoot) {
+              $fallbackVersionRoots = @((Get-Item $fallbackRoot)) + @(Get-ChildItem -Path $fallbackRoot -Directory -ErrorAction SilentlyContinue)
+              $orderedVersionRoots = foreach ($versionRoot in $fallbackVersionRoots) {
+                $version = [Version]"0.0"
+                $versionName = $versionRoot.Name
+                if ($versionName -match "^v(?<major>14)(?<minor>\d)$") {
+                  $version = [Version]("$($Matches.major).$($Matches.minor)")
+                } elseif (-not [Version]::TryParse($versionName, [ref]$version)) {
+                  $version = [Version]"0.0"
+                }
+                [pscustomobject]@{ Directory = $versionRoot; Version = $version }
+              }
+              foreach ($versionRoot in ($orderedVersionRoots | Sort-Object Version -Descending)) {
+                $desktopX64 = Join-Path $versionRoot.Directory.FullName "x64"
+                if (-not (Test-Path $desktopX64)) { continue }
+                $fallbackRuntimeDirectories = @(Get-ChildItem -Path $desktopX64 -Directory -ErrorAction SilentlyContinue |
+                  Where-Object { $_.Name -like "Microsoft.VC*.CRT" })
+                foreach ($directory in $fallbackRuntimeDirectories) {
+                  if (($requiredRuntime | Where-Object { -not (Test-Path (Join-Path $directory.FullName $_)) }).Count -eq 0) {
+                    $runtimeSource = $directory.FullName
+                    break
+                  }
+                }
+                if ($runtimeSource) { break }
+              }
+            }
+          }
+          if (-not $runtimeSource) {
+            throw "Could not locate x64 Visual C++ runtime DLLs in the active VCToolsRedistDir or version-ordered VCINSTALLDIR fallback."
+          }
+          $runtimeEvidence = @()
+          foreach ($name in $requiredRuntime) {
+            $source = Join-Path $runtimeSource $name
+            $destination = Join-Path $binDir $name
+            Copy-Item $source $destination
+            $signature = Get-AuthenticodeSignature -FilePath $destination
+            if ($signature.Status -ne "Valid") { throw "Microsoft runtime signature check failed for ${name}: $($signature.Status)." }
+            $certificate = $signature.SignerCertificate
+            $certificateSubject = if ($certificate) { $certificate.Subject } else { "<missing>" }
+            if (-not $certificate -or $certificateSubject -notmatch "(?i)(^|,\s*)O=Microsoft Corporation(,|$)") {
+              throw "Microsoft runtime certificate organization check failed for ${name}: $certificateSubject."
+            }
+            $runtimeEvidence += [ordered]@{
+              name = $name
+              sha256 = (Get-FileHash -Path $destination -Algorithm SHA256).Hash.ToLowerInvariant()
+              file_version = (Get-Item -Path $destination).VersionInfo.FileVersion
+              product_version = (Get-Item -Path $destination).VersionInfo.ProductVersion
+              signer = $certificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false)
+              certificate_subject = $certificateSubject
+              certificate_issuer = $certificate.Issuer
+              certificate_thumbprint = $certificate.Thumbprint
+              signature_status = $signature.Status.ToString()
+            }
+          }
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          [ordered]@{ architecture = "x64"; source_directory = $runtimeSource; files = $runtimeEvidence } |
+            ConvertTo-Json -Depth 4 | Set-Content (Join-Path $dist "windows-vc-runtime.json") -Encoding utf8
+
+      - name: Install locked desktop dependencies
+        shell: pwsh
+        working-directory: ui
+        run: pnpm install --frozen-lockfile
+
+      - name: Build and package SayGM Desktop
+        shell: pwsh
+        working-directory: ui/desktop
+        env:
+          ELECTRON_PLATFORM: win32
+          ELECTRON_ARCH: x64
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          pnpm run build-goose-acp-client
+          if ($LASTEXITCODE -ne 0) { throw "Goose ACP client build failed ($LASTEXITCODE)." }
+          node scripts/build-main.js
+          if ($LASTEXITCODE -ne 0) { throw "Main process build failed ($LASTEXITCODE)." }
+          node scripts/prepare-platform-binaries.js
+          if ($LASTEXITCODE -ne 0) { throw "Windows runtime binary preparation failed ($LASTEXITCODE)." }
+          $dist = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          New-Item -ItemType Directory -Path $dist -Force | Out-Null
+          $dependencyReport = Join-Path $dist "windows-native-pe-dependencies.txt"
+          Set-Content -Path $dependencyReport -Value "Windows x64 native executable and DLL imports" -Encoding utf8
+          $peFiles = Get-ChildItem "src/bin" -File | Where-Object { $_.Extension.ToLowerInvariant() -in @(".exe", ".dll") } | Sort-Object Name
+          foreach ($file in $peFiles) {
+            Add-Content -Path $dependencyReport -Value "`n=== $($file.Name) ==="
+            $imports = & dumpbin /dependents $file.FullName 2>&1
+            if ($LASTEXITCODE -ne 0) { throw "dumpbin dependency inspection failed for $($file.Name) ($LASTEXITCODE)." }
+            Add-Content -Path $dependencyReport -Value $imports
+            if ($file.Name -eq "goose.exe") {
+              foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+                if (-not (($imports | Out-String) -match "(?im)^\s*$([regex]::Escape($runtimeName))\s*$")) {
+                  throw "Goose does not list the expected app-local runtime dependency $runtimeName."
+                }
+              }
+            }
+          }
+          if (-not ($peFiles.Name -contains "goose.exe")) { throw "Native PE audit did not include goose.exe." }
+          pnpm run i18n:compile
+          if ($LASTEXITCODE -ne 0) { throw "Desktop message compilation failed ($LASTEXITCODE)." }
+          pnpm exec electron-forge package --platform=win32 --arch=x64
+          if ($LASTEXITCODE -ne 0) { throw "Electron Forge Windows packaging failed ($LASTEXITCODE)." }
+          $appDir = Resolve-Path "out/SayGM-win32-x64"
+          if (-not (Test-Path (Join-Path $appDir "SayGM.exe"))) { throw "Packaged SayGM.exe was not produced." }
+          if (-not (Test-Path (Join-Path $appDir "resources/bin/saygm-agent.exe"))) { throw "Packaged Windows SayGM backend was not produced." }
+          if (-not (Test-Path (Join-Path $appDir "resources/bin/uv.exe"))) { throw "Pinned Windows uv.exe was not packaged." }
+          $asarVersion = node -e 'const asar = require("@electron/asar"); const pkg = JSON.parse(asar.extractFile(process.argv[1], "package.json").toString()); process.stdout.write(pkg.version)' "out/SayGM-win32-x64/resources/app.asar"
+          if ($LASTEXITCODE -ne 0) { throw "Could not read packaged ASAR package.json ($LASTEXITCODE)." }
+          if ($asarVersion -ne $env:SAYGM_BETA_VERSION) { throw "Packaged ASAR version $asarVersion does not match $env:SAYGM_BETA_VERSION." }
+          $asarVersion | Set-Content (Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2/asar-package-version.txt") -NoNewline -Encoding ascii
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path $appDir "resources/bin/$runtimeName"))) {
+              throw "Packaged Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
+
+      - name: Install pinned Inno Setup compiler
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $installer = Join-Path $env:RUNNER_TEMP "innosetup-6.7.1.exe"
+          Invoke-WebRequest "https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe" -OutFile $installer
+          $expected = "4D11E8050B6185E0D49BD9E8CC661A7A59F44959A621D31D11033124C4E8A7B0"
+          $actual = (Get-FileHash -Path $installer -Algorithm SHA256).Hash
+          if ($actual -ne $expected) { throw "Inno Setup installer checksum mismatch: $actual" }
+          $signature = Get-AuthenticodeSignature -FilePath $installer
+          $signer = if ($signature.SignerCertificate) { $signature.SignerCertificate.GetNameInfo([System.Security.Cryptography.X509Certificates.X509NameType]::SimpleName, $false) } else { "<missing>" }
+          if ($signature.Status -ne "Valid" -or $signer -ne "Pyrsys B.V.") { throw "Inno Setup signature verification failed: status=$($signature.Status), signer=$signer" }
+          $process = Start-Process -FilePath $installer -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Inno Setup installation failed ($($process.ExitCode))." }
+
+      - name: Build unsigned installer and portable archive
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          $app = Join-Path $env:GITHUB_WORKSPACE "ui/desktop/out/SayGM-win32-x64"
+          New-Item -ItemType Directory -Path $out -Force | Out-Null
+          $iscc = "C:/Program Files (x86)/Inno Setup 6/ISCC.exe"
+          if (-not (Test-Path $iscc)) { throw "Inno Setup compiler not found at $iscc." }
+          & $iscc "/DAppVersion=$env:SAYGM_BETA_VERSION" "/DAppFileVersion=0.1.0.2" "/DSourceDir=$app" "/DOutputDir=$out" "scripts/windows/saygm-desktop-installer.iss"
+          if ($LASTEXITCODE -ne 0) { throw "Inno Setup compilation failed ($LASTEXITCODE)." }
+          Compress-Archive -Path $app -DestinationPath (Join-Path $out "SayGM-$env:SAYGM_BETA_VERSION-win-x64-portable.zip") -CompressionLevel Optimal
+
+      - name: Verify installer and packaged runtime on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $PSNativeCommandUseErrorActionPreference = $true
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          $installer = Join-Path $out "SayGM-$env:SAYGM_BETA_VERSION-Setup-x64-unsigned.exe"
+          $portable = Join-Path $out "SayGM-$env:SAYGM_BETA_VERSION-win-x64-portable.zip"
+          if (-not (Test-Path $installer)) { throw "Unsigned installer is missing." }
+          if (-not (Test-Path $portable)) { throw "Portable Windows x64 ZIP is missing." }
+          python -c 'import sys, zipfile; archive = zipfile.ZipFile(sys.argv[1]); bad = archive.testzip(); assert bad is None, f"CRC mismatch in {bad}"' $portable
+          if ($LASTEXITCODE -ne 0) { throw "Windows portable ZIP failed full archive CRC validation." }
+          $installerVersion = (Get-Item -Path $installer).VersionInfo
+          $installerFileVersion = $installerVersion.FileVersion.Trim()
+          $installerProductVersion = $installerVersion.ProductVersion.Trim()
+          if ($installerFileVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer file version: $installerFileVersion." }
+          if ($installerProductVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installer product version: $installerProductVersion." }
+          if ($installerVersion.FileMajorPart -ne 0 -or $installerVersion.FileMinorPart -ne 1 -or $installerVersion.FileBuildPart -ne 0 -or $installerVersion.FilePrivatePart -ne 2) {
+            throw "Installer binary file version is not the expected numeric 0.1.0.2: $($installerVersion.FileVersion)."
+          }
+
+          $smoke = Join-Path $env:RUNNER_TEMP "saygm-windows-smoke"
+          $installDir = Join-Path $smoke "Install"
+          $env:APPDATA = Join-Path $smoke "Roaming"
+          $env:LOCALAPPDATA = Join-Path $smoke "Local"
+          New-Item -ItemType Directory -Path $env:APPDATA,$env:LOCALAPPDATA -Force | Out-Null
+          $installArgs = @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-", "/CURRENTUSER", "/DIR=$installDir")
+          $process = Start-Process -FilePath $installer -ArgumentList $installArgs -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "SayGM installer smoke install failed ($($process.ExitCode))." }
+
+          $app = Join-Path $installDir "SayGM.exe"
+          $backend = Join-Path $installDir "resources/bin/saygm-agent.exe"
+          if (-not (Test-Path $app)) { throw "Installed SayGM.exe is missing." }
+          if (-not (Test-Path $backend)) { throw "Installed native backend is missing." }
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path (Split-Path $backend) $runtimeName))) {
+              throw "Installed Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
+          $uninstallEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" | ForEach-Object {
+            Get-ItemProperty $_.PSPath
+          } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }
+          if (-not $uninstallEntries) { throw "Per-user SayGM uninstall metadata was not registered." }
+          $uninstallEntry = $uninstallEntries | Select-Object -First 1
+          if ($uninstallEntry.DisplayVersion -ne $env:SAYGM_BETA_VERSION) { throw "Unexpected installed version metadata: $($uninstallEntry.DisplayVersion)." }
+          if ($uninstallEntry.UninstallString -notmatch "unins000\.exe") { throw "Per-user uninstall command metadata is missing." }
+          if (-not (Test-Path (Join-Path $installDir "unins000.exe"))) { throw "Per-user uninstaller was not installed." }
+
+          $protocolKey = "Registry::HKEY_CURRENT_USER\Software\Classes\saygm"
+          $protocolCommandKey = Join-Path $protocolKey "shell\open\command"
+          if (Test-Path $protocolKey) { throw "The isolated runner already has a saygm protocol handler; refusing to overwrite it." }
+
+          ./scripts/windows/verify-windows-dpapi.ps1 -ReportPath (Join-Path $out "dpapi-probe.json")
+          node scripts/qa-native-desktop.mjs --app $app --backend $backend --expected-version $env:SAYGM_BETA_VERSION --expect-storage available --report (Join-Path $out "qa-native-windows.json")
+          if ($LASTEXITCODE -ne 0) { throw "Native packaged desktop / ACP / secure-storage QA failed ($LASTEXITCODE)." }
+
+          if (-not (Test-Path $protocolCommandKey)) { throw "SayGM did not register its protocol handler during native launch." }
+          $protocolCommand = [string](Get-Item $protocolCommandKey).GetValue("")
+          if (-not $protocolCommand) { throw "The saygm protocol handler has no command." }
+          if ($protocolCommand.StartsWith('"')) {
+            $closingQuote = $protocolCommand.IndexOf('"', 1)
+            if ($closingQuote -lt 2) { throw "The saygm protocol command has malformed executable quoting." }
+            $protocolExecutable = $protocolCommand.Substring(1, $closingQuote - 1)
+          } else {
+            $firstSpace = $protocolCommand.IndexOf(' ')
+            $protocolExecutable = if ($firstSpace -lt 0) { $protocolCommand } else { $protocolCommand.Substring(0, $firstSpace) }
+          }
+          if (-not [string]::Equals($protocolExecutable, $app, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "The saygm protocol handler points to '$protocolExecutable', not this install '$app'."
+          }
+          [ordered]@{ registry_key = "HKCU\Software\Classes\saygm\shell\open\command"; command = $protocolCommand; executable = $protocolExecutable } |
+            ConvertTo-Json | Set-Content (Join-Path $out "protocol-handler.json") -Encoding utf8
+
+          [ordered]@{
+            app_sha256 = (Get-FileHash $app -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend_sha256 = (Get-FileHash $backend -Algorithm SHA256).Hash.ToLowerInvariant()
+            asar_sha256 = (Get-FileHash (Join-Path $installDir "resources/app.asar") -Algorithm SHA256).Hash.ToLowerInvariant()
+          } | ConvertTo-Json | Set-Content (Join-Path $out "installed-package-hashes.json") -Encoding utf8
+
+          $uninstaller = Join-Path $installDir "unins000.exe"
+          $process = Start-Process -FilePath $uninstaller -ArgumentList @("/VERYSILENT", "/SUPPRESSMSGBOXES", "/NORESTART", "/SP-") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "SayGM silent uninstall failed ($($process.ExitCode))." }
+          if (Test-Path $app) { throw "SayGM executable remains after uninstall." }
+          if (Test-Path $protocolKey) { throw "The SayGM-owned saygm protocol handler remains after uninstall." }
+          $remainingEntries = Get-ChildItem "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall" -ErrorAction SilentlyContinue | ForEach-Object {
+            Get-ItemProperty $_.PSPath -ErrorAction SilentlyContinue
+          } | Where-Object { $_.DisplayName -eq "SayGM Desktop" }
+          if ($remainingEntries) { throw "SayGM uninstall registry metadata remains after uninstall." }
+
+          Expand-Archive -Path $portable -DestinationPath (Join-Path $smoke "Portable")
+          if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "SayGM.exe" | Select-Object -First 1)) { throw "Portable archive lacks SayGM.exe." }
+          $portableBackend = Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "saygm-agent.exe" | Select-Object -First 1
+          if (-not $portableBackend) { throw "Portable archive lacks the native backend." }
+          foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
+            if (-not (Test-Path (Join-Path $portableBackend.DirectoryName $runtimeName))) {
+              throw "Portable Goose is missing app-local Microsoft runtime dependency $runtimeName."
+            }
+          }
+
+      - name: Bind installer, installed app, and portable package provenance
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          $appDir = Join-Path $env:GITHUB_WORKSPACE "ui/desktop/out/SayGM-win32-x64"
+          $installDir = Join-Path (Join-Path $env:RUNNER_TEMP "saygm-windows-smoke") "Install"
+          $portableRoot = Join-Path (Join-Path $env:RUNNER_TEMP "saygm-windows-smoke") "Portable"
+          $portableApp = Get-ChildItem $portableRoot -Recurse -Filter "SayGM.exe" | Select-Object -First 1
+          if (-not $portableApp) { throw "Portable archive lacks SayGM.exe for provenance checks." }
+          $portableResources = Join-Path $portableApp.DirectoryName "resources"
+          $qa = Get-Content (Join-Path $out "qa-native-windows.json") -Raw | ConvertFrom-Json
+          $sourceHashes = [ordered]@{
+            app_sha256 = (Get-FileHash (Join-Path $appDir "SayGM.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend_sha256 = (Get-FileHash (Join-Path $appDir "resources/bin/saygm-agent.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+            asar_sha256 = (Get-FileHash (Join-Path $appDir "resources/app.asar") -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          $asarVersion = Get-Content (Join-Path $out "asar-package-version.txt") -Raw
+          $installedHashes = Get-Content (Join-Path $out "installed-package-hashes.json") -Raw | ConvertFrom-Json -AsHashtable
+          $portableHashes = [ordered]@{
+            app_sha256 = (Get-FileHash $portableApp.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend_sha256 = (Get-FileHash (Join-Path $portableResources "bin/saygm-agent.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+            asar_sha256 = (Get-FileHash (Join-Path $portableResources "app.asar") -Algorithm SHA256).Hash.ToLowerInvariant()
+          }
+          foreach ($field in $sourceHashes.Keys) {
+            if ($sourceHashes[$field] -ne $installedHashes[$field] -or $sourceHashes[$field] -ne $portableHashes[$field]) {
+              throw "Packaged $field changed between the Forge directory, installed application, and portable ZIP."
+            }
+            if ($sourceHashes[$field] -ne $qa.$field) { throw "Native smoke tested a different $field than the build package." }
+          }
+          $backendBuildSha = (Get-FileHash (Join-Path $env:GITHUB_WORKSPACE "target/x86_64-pc-windows-msvc/release/goose.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+          if ($sourceHashes.backend_sha256 -ne $backendBuildSha) { throw "Packaged Goose differs from the native Cargo release output." }
+          if ($qa.runtime_version -ne $env:SAYGM_BETA_VERSION) { throw "Native QA report has unexpected runtime version $($qa.runtime_version)." }
+          $installer = Get-Item (Join-Path $out "SayGM-$env:SAYGM_BETA_VERSION-Setup-x64-unsigned.exe")
+          $portableZip = Get-Item (Join-Path $out "SayGM-$env:SAYGM_BETA_VERSION-win-x64-portable.zip")
+          $provenance = [ordered]@{
+            result = "passed"
+            product_source_revision = $env:SAYGM_PRODUCT_SOURCE_SHA
+            build_automation_revision = $env:GITHUB_SHA
+            version = $env:SAYGM_BETA_VERSION
+            platform = "windows-x64"
+            installer = [ordered]@{
+              name = $installer.Name
+              sha256 = (Get-FileHash $installer.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              file_version = $installer.VersionInfo.FileVersion
+              product_version = $installer.VersionInfo.ProductVersion
+            }
+            portable_zip = [ordered]@{
+              name = $portableZip.Name
+              sha256 = (Get-FileHash $portableZip.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            }
+            asar_package_version = $asarVersion
+            cargo_backend_sha256 = $backendBuildSha
+            package_hashes = $sourceHashes
+            installed_hashes = $installedHashes
+            portable_hashes = $portableHashes
+            native_qa_report = "qa-native-windows.json"
+            all_packaged_files_match_smoked_app = $true
+          }
+          $provenance | ConvertTo-Json -Depth 6 | Set-Content (Join-Path $out "package-verification.json") -Encoding utf8
+
+      - name: Create artifact checksums
+        if: always()
+        shell: pwsh
+        run: |
+          $out = Join-Path $env:GITHUB_WORKSPACE "dist-windows-beta.2"
+          if (-not (Test-Path $out)) { exit 0 }
+          Get-ChildItem $out -File | Where-Object { $_.Name -ne "SHA256SUMS.txt" } | Sort-Object Name | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            "$hash  $($_.Name)"
+          } | Set-Content (Join-Path $out "SHA256SUMS.txt") -Encoding ascii
+
+      - name: Upload private CI artifacts
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: saygm-desktop-windows-x64-beta.2-${{ github.sha }}-run-${{ github.run_id }}
+          path: dist-windows-beta.2/
+          if-no-files-found: error
+          retention-days: 90
