@@ -10,15 +10,16 @@ It is a private, product-specific distribution of [Goose](https://github.com/aai
 
 ## Downloads
 
-Latest release: `0.1.0-beta.1`.
+Latest release: `0.1.0-beta.2`.
 
 | Platform | Availability |
 | --- | --- |
 | macOS Apple Silicon | Published; signed and notarized. |
 | Windows x64 | Published; unsigned. |
-| Ubuntu x64 and ARM64 | Published. |
+| Ubuntu x64 | Published. |
+| Ubuntu ARM64 | Published. |
 
-Download available assets from the [GitHub Releases page](https://github.com/taostat/saygm-desktop/releases). The repository is private, so viewing or downloading releases requires access to `taostat/saygm-desktop`.
+Download available builds from the public [SayGM Desktop page](https://saygm.com/desktop).
 
 ## Development
 
