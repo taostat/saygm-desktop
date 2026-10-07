@@ -208,7 +208,7 @@ jobs:
           set -euo pipefail
           app_dir="ui/desktop/out/SayGM-darwin-arm64"
           app="$app_dir/SayGM.app"
-          backend="$app/Contents/Resources/bin/goose"
+          backend="$app/Contents/Resources/bin/saygm-agent"
           report="artifacts/qa/qa-native-macos-arm64.json"
           test -d "$app"
           test -x "$backend"
@@ -221,6 +221,8 @@ jobs:
             grep -F "TeamIdentifier=$APPLE_TEAM_ID" <<< "$details"
             grep -E 'flags=.*\(runtime\)' <<< "$details"
           done
+          backend_details="$(codesign --display --verbose=4 "$backend" 2>&1)"
+          grep -F 'Identifier=com.saygm.desktop.agent' <<< "$backend_details"
           codesign --verify --deep --strict --verbose=2 "$app"
           if ! xcrun stapler validate -v "$app"; then
             xcrun stapler staple -v "$app"
@@ -315,7 +317,7 @@ jobs:
           shasum -a 256 "$zip" "$dmg" > artifacts/SHA256SUMS.txt
           codesign --verify --deep --strict --verbose=2 "$app"
           node - artifacts/provenance.json \
-            "$app" "$app/Contents/Resources/bin/goose" "$zip" "$dmg" artifacts/qa/qa-native-macos-arm64.json artifacts/notarization.json <<'NODE'
+            "$app" "$app/Contents/Resources/bin/saygm-agent" "$zip" "$dmg" artifacts/qa/qa-native-macos-arm64.json artifacts/notarization.json <<'NODE'
           const fs = require('node:fs');
           const { createHash } = require('node:crypto');
           const { execFileSync } = require('node:child_process');

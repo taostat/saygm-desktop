@@ -107,7 +107,7 @@ jobs:
         run: |
           set -euo pipefail
           app="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/MacOS/SayGM"
-          backend="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/Resources/bin/goose"
+          backend="ui/desktop/out/SayGM-darwin-arm64/SayGM.app/Contents/Resources/bin/saygm-agent"
           report="ui/desktop/out/qa/qa-native-macos-arm64.json"
           test -x "$app"
           test -x "$backend"

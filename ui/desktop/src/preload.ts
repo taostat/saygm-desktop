@@ -345,6 +345,7 @@ const electronAPI: ElectronAPI = {
     connectApiKey: (key: string) => gmAccountInvoke('gm-account:connect-api-key', key),
     finishProviderSetup: () => gmAccountInvoke('gm-account:finish-provider-setup'),
     logout: () => gmAccountInvoke('gm-account:logout'),
+    clearLegacyApiKey: () => gmAccountInvoke('gm-account:clear-legacy-api-key'),
     openTopup: () => gmAccountInvoke('gm-account:open-topup'),
   },
   getVersion: (): string => {

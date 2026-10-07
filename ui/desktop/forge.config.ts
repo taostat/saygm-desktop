@@ -2,7 +2,8 @@ const { FusesPlugin } = require('@electron-forge/plugin-fuses');
 const { FuseV1Options, FuseVersion } = require('@electron/fuses');
 const { createHash } = require('node:crypto');
 const { readFile, rm, writeFile } = require('node:fs/promises');
-const { resolve } = require('path');
+const { basename, resolve } = require('path');
+const { renamePackagedBackend } = require('./scripts/rename-packaged-backend.cjs');
 
 const isLinuxVulkanBuild = process.env.GOOSE_DESKTOP_LINUX_VARIANT === 'vulkan';
 const betaVersion = process.env.SAYGM_BETA_VERSION;
@@ -25,12 +26,14 @@ function removeBuildOnlyBinFiles(
     )
   ).then(async () => {
     try {
+      // Finalize the app-local backend name before Forge signs the packaged app.
+      const packagedBackendPath = await renamePackagedBackend(resourcesPath, platform);
       const expectedBackendSha256 = process.env.SAYGM_MACOS_SOURCE_BACKEND_SHA256;
       if (platform === 'darwin' && betaVersion && !expectedBackendSha256) {
         throw new Error('Signed macOS beta packaging requires a recorded native backend hash.');
       }
       if (platform === 'darwin' && expectedBackendSha256) {
-        const packagedBackend = await readFile(resolve(resourcesPath, 'bin', 'goose'));
+        const packagedBackend = await readFile(packagedBackendPath);
         const actualBackendSha256 = createHash('sha256').update(packagedBackend).digest('hex');
         if (actualBackendSha256 !== expectedBackendSha256) {
           throw new Error('Packaged macOS backend does not match the native build output.');
@@ -130,6 +133,9 @@ if (process.env.APPLE_TEAM_ID) {
           ? resolve(__dirname, 'entitlements.plist')
           : resolve(__dirname, 'entitlements.inherit.plist'),
       hardenedRuntime: true,
+      ...(basename(filePath) === 'saygm-agent'
+        ? { additionalArguments: ['--identifier', 'com.saygm.desktop.agent'] }
+        : {}),
     }),
   };
 

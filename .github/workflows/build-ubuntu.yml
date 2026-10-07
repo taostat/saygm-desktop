@@ -83,13 +83,13 @@ jobs:
           test "$(dpkg-query -W -f='${Architecture}' saygm)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
           test -x /usr/bin/saygm
           test -x /usr/lib/saygm/SayGM
-          test -x /usr/lib/saygm/resources/bin/goose
+          test -x /usr/lib/saygm/resources/bin/saygm-agent
           desktop_file="$(dpkg-query -L saygm | grep '/applications/.*\.desktop$' | head -n 1)"
           test -n "$desktop_file"
           grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
           grep -Fx 'Icon=saygm' "$desktop_file"
-          ldd /usr/lib/saygm/resources/bin/goose | tee artifacts/goose-ldd.txt
-          if grep -F 'not found' artifacts/goose-ldd.txt; then exit 1; fi
+          ldd /usr/lib/saygm/resources/bin/saygm-agent | tee artifacts/saygm-agent-ldd.txt
+          if grep -F 'not found' artifacts/saygm-agent-ldd.txt; then exit 1; fi
           node --input-type=module <<'NODE'
           import assert from 'node:assert/strict';
           import { createHash } from 'node:crypto';
@@ -98,11 +98,11 @@ jobs:
           const hash = async (path) => createHash('sha256').update(await readFile(path)).digest('hex');
           const installed = {
             app_sha256: await hash('/usr/lib/saygm/SayGM'),
-            backend_sha256: await hash('/usr/lib/saygm/resources/bin/goose'),
+            backend_sha256: await hash('/usr/lib/saygm/resources/bin/saygm-agent'),
             asar_sha256: await hash('/usr/lib/saygm/resources/app.asar'),
           };
           assert.equal(installed.app_sha256, report.app_sha256, 'Installed Debian app differs from verified package');
-          assert.equal(installed.backend_sha256, report.goose_sha256, 'Installed Debian backend differs from verified package');
+          assert.equal(installed.backend_sha256, report.backend_sha256, 'Installed Debian backend differs from verified package');
           assert.equal(installed.asar_sha256, report.asar_sha256, 'Installed Debian ASAR differs from verified package');
           const manifest = {
             result: 'passed',
@@ -134,7 +134,7 @@ jobs:
             fi
             xvfb-run -a node scripts/qa-native-desktop.mjs \
               --app /usr/lib/saygm/SayGM \
-              --backend /usr/lib/saygm/resources/bin/goose \
+              --backend /usr/lib/saygm/resources/bin/saygm-agent \
               --expect-arch "${{ matrix.architecture }}" \
               --expected-version "$SAYGM_BETA_VERSION" \
               --expect-storage available \
@@ -142,7 +142,7 @@ jobs:
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-secret-service.json"
             xvfb-run -a node scripts/qa-native-desktop.mjs \
               --app /usr/lib/saygm/SayGM \
-              --backend /usr/lib/saygm/resources/bin/goose \
+              --backend /usr/lib/saygm/resources/bin/saygm-agent \
               --expect-arch "${{ matrix.architecture }}" \
               --expected-version "$SAYGM_BETA_VERSION" \
               --expect-storage unavailable \

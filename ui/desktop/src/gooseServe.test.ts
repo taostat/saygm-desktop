@@ -10,6 +10,7 @@ import {
 } from './gooseServe';
 
 const binaryName = process.platform === 'win32' ? 'goose.exe' : 'goose';
+const packagedBinaryName = process.platform === 'win32' ? 'saygm-agent.exe' : 'saygm-agent';
 const tempDirs: string[] = [];
 const originalCwd = process.cwd();
 
@@ -68,7 +69,7 @@ describe('findGooseBinaryPath', () => {
     const tempDir = makeTempDir();
     const resourcesPath = path.join(tempDir, 'resources');
     const overridePath = makeFile(path.join(tempDir, 'override-goose'));
-    makeFile(path.join(resourcesPath, 'bin', binaryName));
+    makeFile(path.join(resourcesPath, 'bin', packagedBinaryName));
     vi.stubEnv('GOOSE_BINARY', overridePath);
 
     expect(() => findGooseBinaryPath({ isPackaged: true, resourcesPath })).toThrow(
@@ -90,12 +91,22 @@ describe('findGooseBinaryPath', () => {
     expect(fs.realpathSync(resolvedPath)).not.toBe(fs.realpathSync(debugPath));
   });
 
-  it('uses the bundled goose binary in packaged builds', () => {
+  it('uses the bundled SayGM agent in packaged builds', () => {
     const tempDir = makeTempDir();
     const resourcesPath = path.join(tempDir, 'resources');
-    const bundledPath = makeFile(path.join(resourcesPath, 'bin', binaryName));
+    const bundledPath = makeFile(path.join(resourcesPath, 'bin', packagedBinaryName));
 
     expect(findGooseBinaryPath({ isPackaged: true, resourcesPath })).toBe(bundledPath);
+  });
+
+  it('does not fall back to a Goose-named executable in packaged builds', () => {
+    const tempDir = makeTempDir();
+    const resourcesPath = path.join(tempDir, 'resources');
+    makeFile(path.join(resourcesPath, 'bin', binaryName));
+
+    expect(() => findGooseBinaryPath({ isPackaged: true, resourcesPath })).toThrow(
+      'SayGM backend binary not found'
+    );
   });
 });
 
@@ -132,6 +143,12 @@ describe('startGooseServe', () => {
         fs.rmSync(tempDir, { recursive: true, force: true });
       }
     }
+  });
+
+  it('fails before spawn when the managed-key broker is required but missing', async () => {
+    await expect(
+      startGooseServe({ serverSecret: 'test-secret', managedModelKeyBrokerRequired: true })
+    ).rejects.toThrow('private SayGM model-key channel is required');
   });
 
   it.skipIf(process.platform === 'win32')('uses the injected readiness probe', async () => {

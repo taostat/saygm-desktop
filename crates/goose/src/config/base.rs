@@ -1,3 +1,4 @@
+use crate::config::managed_key_broker;
 use crate::config::paths::Paths;
 use crate::config::GooseMode;
 use crate::product::ProductPolicy;
@@ -47,20 +48,28 @@ pub enum ConfigError {
     DirectoryError(String),
     #[error("Failed to access keyring: {0}")]
     KeyringError(String),
-    #[error("SayGM could not create its secrets entry in the system credential store. Check keyring access settings, then retry model setup.")]
+    #[error(
+        "SayGM could not create its secrets entry in the system credential store. Check keyring access settings, then retry model setup."
+    )]
     KeyringEntryMissing,
-    #[error("SayGM could not access saved secrets in the system credential store. Check the keyring access settings, then retry model setup.")]
+    #[error(
+        "SayGM could not access saved secrets in the system credential store. Check the keyring access settings, then retry model setup."
+    )]
     KeyringAccessDenied,
     #[error(
         "The system credential store is unavailable. Make it available, then retry model setup."
     )]
     KeyringUnavailable,
-    #[error("SayGM could not safely read or write saved secrets. Check system credential store access, then retry model setup.")]
+    #[error(
+        "SayGM could not safely read or write saved secrets. Check system credential store access, then retry model setup."
+    )]
     KeyringOperationFailed,
     #[error("Failed to lock config file: {0}")]
     LockError(String),
     #[error("Secret stored using file-based fallback")]
     FallbackToFileStorage,
+    #[error("Managed SayGM model key operation failed: {0}")]
+    ManagedKeyBroker(String),
 }
 
 impl From<serde_json::Error> for ConfigError {
@@ -186,6 +195,34 @@ enum SecretStorage {
 enum SecretMutation<T> {
     Write(T),
     Unchanged(T),
+}
+
+fn validate_managed_model_key(value: &Value) -> Result<(), ConfigError> {
+    let Some(candidate) = value.as_str() else {
+        return Err(ConfigError::ManagedKeyBroker(
+            "managed-by-account; expected the staged SayGM API key".to_string(),
+        ));
+    };
+    if candidate.len() > 4 * 1024 {
+        return Err(ConfigError::ManagedKeyBroker(
+            "managed-by-account; key exceeds the allowed size".to_string(),
+        ));
+    }
+    let Some(authoritative_key) =
+        managed_key_broker::get_model_key().map_err(ConfigError::ManagedKeyBroker)?
+    else {
+        return Err(ConfigError::ManagedKeyBroker(
+            "managed-by-account; no staged or active key is available".to_string(),
+        ));
+    };
+    let candidate_digest = Sha256::digest(candidate.as_bytes());
+    let authoritative_digest = Sha256::digest(authoritative_key.as_bytes());
+    if candidate_digest.as_slice() != authoritative_digest.as_slice() {
+        return Err(ConfigError::ManagedKeyBroker(
+            "managed-by-account; key does not match staged account authority".to_string(),
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) enum SecretUpdate<V, R> {
@@ -1005,6 +1042,13 @@ impl Config {
     /// - The value cannot be deserialized into the requested type
     /// - There is an error accessing the keyring
     pub fn get_secret<T: for<'de> Deserialize<'de>>(&self, key: &str) -> Result<T, ConfigError> {
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            let value = managed_key_broker::get_model_key()
+                .map_err(ConfigError::ManagedKeyBroker)?
+                .ok_or_else(|| ConfigError::NotFound(key.to_string()))?;
+            return serde_json::from_value(Value::String(value)).map_err(Into::into);
+        }
+
         if self.product_policy.allows_secret_environment_overrides() {
             let env_key = key.to_uppercase();
             if let Ok(val) = env::var(&env_key) {
@@ -1188,6 +1232,9 @@ impl Config {
         V: Serialize,
     {
         let value = serde_json::to_value(value)?;
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            return validate_managed_model_key(&value);
+        }
         self.mutate_secrets(|values| {
             values.insert(key.to_string(), value);
             Ok(SecretMutation::Write(()))
@@ -1203,6 +1250,11 @@ impl Config {
         T: for<'de> Deserialize<'de> + Default,
         V: Serialize,
     {
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            return Err(ConfigError::ManagedKeyBroker(
+                "managed-by-account".to_string(),
+            ));
+        }
         self.mutate_secrets(|values| {
             let current = values
                 .get(key)
@@ -1230,6 +1282,29 @@ impl Config {
             return Ok(());
         }
 
+        if managed_key_broker::is_requested() {
+            for (_, value) in updates
+                .iter()
+                .filter(|(key, _)| key == crate::providers::saygm::SAYGM_API_KEY)
+            {
+                validate_managed_model_key(value)?;
+            }
+            let generic_updates = updates
+                .iter()
+                .filter(|(key, _)| key != crate::providers::saygm::SAYGM_API_KEY)
+                .cloned()
+                .collect::<Vec<_>>();
+            if generic_updates.is_empty() {
+                return Ok(());
+            }
+            return self.mutate_secrets(|values| {
+                for (key, value) in &generic_updates {
+                    values.insert(key.clone(), value.clone());
+                }
+                Ok(SecretMutation::Write(()))
+            });
+        }
+
         self.mutate_secrets(|values| {
             for (key, value) in updates {
                 values.insert(key.clone(), value.clone());
@@ -1249,6 +1324,11 @@ impl Config {
     /// - There is an error accessing the keyring
     /// - There is an error serializing the remaining values
     pub fn delete_secret(&self, key: &str) -> Result<(), ConfigError> {
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            return Err(ConfigError::ManagedKeyBroker(
+                "managed-by-account; use conditional account revocation".to_string(),
+            ));
+        }
         self.mutate_secrets(|values| {
             values.remove(key);
             Ok(SecretMutation::Write(()))
@@ -1264,6 +1344,17 @@ impl Config {
         if expected_sha256.len() != 64
             || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
+            return Ok(false);
+        }
+
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            let matches = managed_key_broker::model_key_matches(&expected_sha256)
+                .map_err(ConfigError::ManagedKeyBroker)?;
+            if matches {
+                return Err(ConfigError::ManagedKeyBroker(
+                    "managed-by-account; revoke the active account key first".to_string(),
+                ));
+            }
             return Ok(false);
         }
 
@@ -1286,6 +1377,40 @@ impl Config {
         Ok(deleted)
     }
 
+    pub fn remove_legacy_saygm_api_key_if_sha256_matches(
+        &self,
+        expected_sha256: &str,
+    ) -> Result<bool, ConfigError> {
+        let expected_sha256 = expected_sha256.trim().to_ascii_lowercase();
+        if expected_sha256.len() != 64
+            || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Ok(false);
+        }
+        if !self.product_policy.is_saygm_desktop() || !managed_key_broker::is_requested() {
+            return Err(ConfigError::ManagedKeyBroker(
+                "legacy key cleanup is available only in managed SayGM broker mode".to_string(),
+            ));
+        }
+
+        self.mutate_secrets(|values| {
+            let Some(Value::String(secret)) = values.get(crate::providers::saygm::SAYGM_API_KEY)
+            else {
+                return Ok(SecretMutation::Unchanged(false));
+            };
+            let actual_sha256 = Sha256::digest(secret.as_bytes())
+                .iter()
+                .map(|byte| format!("{byte:02x}"))
+                .collect::<String>();
+            if actual_sha256 == expected_sha256 {
+                values.remove(crate::providers::saygm::SAYGM_API_KEY);
+                Ok(SecretMutation::Write(true))
+            } else {
+                Ok(SecretMutation::Unchanged(false))
+            }
+        })
+    }
+
     /// Compare a secret digest against storage without using this process's cache.
     ///
     /// Desktop backends can share one keyring while keeping separate in-memory
@@ -1300,6 +1425,11 @@ impl Config {
             || !expected_sha256.bytes().all(|byte| byte.is_ascii_hexdigit())
         {
             return Ok(false);
+        }
+
+        if key == crate::providers::saygm::SAYGM_API_KEY && managed_key_broker::is_requested() {
+            return managed_key_broker::model_key_matches(&expected_sha256)
+                .map_err(ConfigError::ManagedKeyBroker);
         }
 
         let _guard = self.guard.lock().unwrap();
@@ -1319,6 +1449,16 @@ impl Config {
     pub fn delete_secret_values(&self, keys: &[String]) -> Result<(), ConfigError> {
         if keys.is_empty() {
             return Ok(());
+        }
+
+        if managed_key_broker::is_requested()
+            && keys
+                .iter()
+                .any(|key| key == crate::providers::saygm::SAYGM_API_KEY)
+        {
+            return Err(ConfigError::ManagedKeyBroker(
+                "managed-by-account; use conditional account revocation".to_string(),
+            ));
         }
 
         self.mutate_secrets(|values| {
@@ -1626,12 +1766,14 @@ mod tests {
         password: Mutex<Option<String>>,
         get_error: Mutex<Option<keyring::Error>>,
         set_error: Mutex<Option<keyring::Error>>,
+        reads: Mutex<usize>,
         writes: Mutex<usize>,
     }
 
     #[cfg(feature = "system-keyring")]
     impl KeyringStore for InMemoryKeyringStore {
         fn get_password(&self, _service: &str, _username: &str) -> Result<String, keyring::Error> {
+            *self.reads.lock().unwrap() += 1;
             if let Some(error) = self.get_error.lock().unwrap().take() {
                 return Err(error);
             }
@@ -2005,6 +2147,139 @@ mod tests {
         ));
         assert_eq!(*store.writes.lock().unwrap(), 0);
         assert!(store.password.lock().unwrap().is_none());
+        assert!(!directory.path().join("secrets.yaml").exists());
+    }
+
+    #[cfg(all(feature = "system-keyring", unix))]
+    #[test]
+    fn managed_saygm_secret_paths_use_broker_without_native_keyring_access() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::os::unix::net::UnixStream;
+        use std::thread;
+        use std::time::Duration;
+
+        let store = Arc::new(InMemoryKeyringStore::default());
+        let legacy = r#"{"SAYGM_API_KEY":"legacy-key","extension-secret":"kept"}"#;
+        *store.password.lock().unwrap() = Some(legacy.to_string());
+        *store.get_error.lock().unwrap() = Some(keyring::Error::NoStorageAccess(Box::new(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "fixture read denied"),
+        )));
+        *store.set_error.lock().unwrap() = Some(keyring::Error::NoStorageAccess(Box::new(
+            std::io::Error::new(std::io::ErrorKind::PermissionDenied, "fixture write denied"),
+        )));
+        let (config, directory) = new_saygm_test_keyring_config(store.clone());
+        let managed_key = "broker-managed-fixture-key";
+        let managed_digest = Sha256::digest(managed_key.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        let other_digest = "b".repeat(64);
+
+        let (client_stream, server_stream) = UnixStream::pair().unwrap();
+        let server_managed_digest = managed_digest.clone();
+        let server_other_digest = other_digest.clone();
+        let server = thread::spawn(move || {
+            let mut reader = BufReader::new(server_stream);
+            for (expected_id, expected_op) in [
+                (1, "get_model_key"),
+                (2, "get_model_key"),
+                (3, "get_model_key"),
+                (4, "get_model_key"),
+                (5, "get_model_key"),
+                (6, "model_key_matches"),
+                (7, "model_key_matches"),
+                (8, "model_key_matches"),
+            ] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                let expected_request = match expected_op {
+                    "get_model_key" => serde_json::json!({
+                        "id": expected_id,
+                        "op": expected_op,
+                    }),
+                    "model_key_matches" => serde_json::json!({
+                        "id": expected_id,
+                        "op": expected_op,
+                        "sha256": if expected_id == 8 {
+                            server_other_digest.as_str()
+                        } else {
+                            server_managed_digest.as_str()
+                        },
+                    }),
+                    _ => unreachable!("unexpected fixture operation"),
+                };
+                assert_eq!(request, expected_request);
+                let response = if expected_op == "get_model_key" {
+                    format!("{{\"id\":{expected_id},\"ok\":true,\"key\":\"{managed_key}\"}}\n")
+                } else {
+                    let matches = matches!(expected_id, 6 | 7);
+                    format!("{{\"id\":{expected_id},\"ok\":true,\"matches\":{matches}}}\n")
+                };
+                reader.get_mut().write_all(response.as_bytes()).unwrap();
+            }
+        });
+
+        managed_key_broker::with_test_broker(client_stream, Duration::from_secs(2), || {
+            let key: String = config
+                .get_secret(crate::providers::saygm::SAYGM_API_KEY)
+                .unwrap();
+            assert_eq!(key, managed_key);
+
+            let optional_key: Option<String> = config
+                .get_secret(crate::providers::saygm::SAYGM_API_KEY)
+                .unwrap();
+            assert_eq!(optional_key.as_deref(), Some(managed_key));
+
+            assert!(config
+                .set_secret(crate::providers::saygm::SAYGM_API_KEY, &managed_key)
+                .is_ok());
+            assert!(matches!(
+                config.set_secret(crate::providers::saygm::SAYGM_API_KEY, &"different-key"),
+                Err(ConfigError::ManagedKeyBroker(_))
+            ));
+            config
+                .set_secret_values(&[(
+                    crate::providers::saygm::SAYGM_API_KEY.to_string(),
+                    Value::String(managed_key.to_string()),
+                )])
+                .unwrap();
+
+            assert!(config
+                .secret_sha256_matches_fresh(
+                    crate::providers::saygm::SAYGM_API_KEY,
+                    &managed_digest,
+                )
+                .unwrap());
+            assert!(matches!(
+                config.delete_secret(crate::providers::saygm::SAYGM_API_KEY),
+                Err(ConfigError::ManagedKeyBroker(_))
+            ));
+            assert!(matches!(
+                config.delete_secret_if_sha256_matches(
+                    crate::providers::saygm::SAYGM_API_KEY,
+                    &managed_digest,
+                ),
+                Err(ConfigError::ManagedKeyBroker(_))
+            ));
+            assert!(!config
+                .delete_secret_if_sha256_matches(
+                    crate::providers::saygm::SAYGM_API_KEY,
+                    &other_digest,
+                )
+                .unwrap());
+            assert!(matches!(
+                config.delete_secret_values(&[crate::providers::saygm::SAYGM_API_KEY.to_string()]),
+                Err(ConfigError::ManagedKeyBroker(_))
+            ));
+        });
+
+        server.join().unwrap();
+        assert_eq!(*store.reads.lock().unwrap(), 0);
+        assert_eq!(*store.writes.lock().unwrap(), 0);
+        assert!(store.get_error.lock().unwrap().is_some());
+        assert!(store.set_error.lock().unwrap().is_some());
+        assert_eq!(store.password.lock().unwrap().as_deref(), Some(legacy));
         assert!(!directory.path().join("secrets.yaml").exists());
     }
 

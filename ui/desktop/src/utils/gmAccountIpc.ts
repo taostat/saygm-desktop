@@ -51,10 +51,35 @@ const provider: GmProviderBridge = {
         });
       }
     }),
+  clearLegacyApiKeyIfMatches: async (target, sha256) =>
+    withAcpClient(target, async ({ connection }) => {
+      const response: unknown = await connection.agent.request(
+        '_goose/unstable/providers/secrets/delete-legacy-if-sha256-matches',
+        {
+          providerId: SAYGM_PRODUCT.providerId,
+          key: SAYGM_PRODUCT.providerApiKeyField,
+          expectedSha256: sha256,
+        }
+      );
+      if (!isRecord(response) || typeof response.deleted !== 'boolean') {
+        throw new Error('The local SayGM service returned an invalid legacy-key cleanup response.');
+      }
+      return response.deleted;
+    }),
 };
 
-const account = new GmAccountService(provider);
+const account = new GmAccountService(provider, process.platform === 'darwin');
 const lifecycleWindows = new Set<number>();
+
+export async function initializeGmAccountModelKeyAuthority(): Promise<void> {
+  await account.initializeManagedModelKeyAuthority();
+}
+
+export const gmAccountModelKeyBroker = {
+  readManagedModelKeyForBackend: () => account.readManagedModelKeyForBackend(),
+  managedModelKeyMatchesForBackend: (sha256: string) =>
+    account.managedModelKeyMatchesForBackend(sha256),
+};
 
 export function registerGmAccountIpcHandlers(dependencies: GmAccountIpcDependencies): void {
   ipcMain.handle('gm-account:get-status', (event) => {
@@ -176,6 +201,12 @@ export function registerGmAccountIpcHandlers(dependencies: GmAccountIpcDependenc
     const targets = localAcpTargets(dependencies.getActiveAcpTargets());
     const result = await runAndNotify(() => account.logout(targets), dependencies);
     if (result.warning) throw new Error(result.warning);
+  });
+  ipcMain.handle('gm-account:clear-legacy-api-key', async (event) => {
+    const windowId = requireWindowId(event, dependencies);
+    bindWindowLifecycle(windowId);
+    const targets = localAcpTargets(dependencies.getActiveAcpTargets());
+    return runAndNotify(() => account.clearLegacyApiKey(targets), dependencies);
   });
   ipcMain.handle('gm-account:open-topup', async (event) => {
     bindWindowLifecycle(requireWindowId(event, dependencies));

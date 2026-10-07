@@ -29,6 +29,7 @@ const GUARDRAIL_PREVIEW_MAX_TEXT_BYTES = 128 * 1024;
 const GUARDRAIL_PREVIEW_MAX_BODY_BYTES = 1024 * 1024;
 const GUARDRAIL_PREVIEW_MAX_CONFIG_BYTES = 16 * 1024;
 const CREDENTIALS_FILE = SAYGM_PRODUCT.accountCredentialsFile;
+const LEGACY_KEY_CLEANUP_FILE = 'saygm-legacy-key-cleanup.safe';
 const API_KEY_NAME = SAYGM_PRODUCT.providerKeyName;
 const CLEANUP_RETRY_COOLDOWN_MS = 60_000;
 type FetchInit = NonNullable<Parameters<typeof globalThis.fetch>[1]>;
@@ -48,6 +49,7 @@ type SessionCredentials = {
   managedProviderKeyId?: string;
   managedProviderKeyHash?: string;
   managedProviderKey?: string;
+  managedProviderKeyState?: 'pending' | 'active' | 'disabled';
 };
 
 type ApiKeyCredentials = {
@@ -55,6 +57,7 @@ type ApiKeyCredentials = {
   key: string;
   keyPrefix: string;
   providerConfigured: boolean;
+  keyAuthorityState?: 'pending' | 'active' | 'disabled';
 };
 
 type StoredCredentials = (SessionCredentials | ApiKeyCredentials) & { version: 1 };
@@ -71,6 +74,8 @@ type PendingCleanup = {
   managedProviderKeyHash?: string;
   state: 'cleanup' | 'active';
 };
+
+type LegacyKeyCleanup = { version: 1; sha256s: string[] };
 
 type DeviceAuthorization = {
   device_code: string;
@@ -100,7 +105,16 @@ type JsonResponse = { status: number; body: unknown };
 export type GmProviderBridge = {
   saveApiKey: (target: GmAcpTarget, key: string) => Promise<void>;
   clearApiKeyIfMatches: (target: GmAcpTarget, sha256: string) => Promise<void>;
+  clearLegacyApiKeyIfMatches?: (target: GmAcpTarget, sha256: string) => Promise<boolean>;
 };
+
+export type ManagedModelKeyBrokerResult =
+  | { ok: true; key: string | null }
+  | { ok: true; matches: boolean }
+  | {
+      ok: false;
+      code: 'unavailable' | 'denied' | 'revoked' | 'invalid_request' | 'internal_error';
+    };
 
 export type GmAcpTarget = {
   url: string;
@@ -119,8 +133,98 @@ export class GmAccountService {
   private cleanupRetry: Promise<boolean> | null = null;
   private cleanupRetryFailureLatched = false;
   private cleanupRetryAfter = 0;
+  private modelKeyAuthorityReady = false;
+  private modelKeyAuthorityFailureLatched = false;
+  private modelKeyAuthorityBlocked = false;
+  private modelKeyAuthorityGeneration = 0;
+  private modelKeyAuthority: StoredCredentials | null = null;
+  private modelKeyAuthorityInitialization: Promise<void> | null = null;
 
-  constructor(private readonly provider: GmProviderBridge) {}
+  constructor(
+    private readonly provider: GmProviderBridge,
+    private readonly managedKeyBrokerEnabled = false
+  ) {}
+
+  initializeManagedModelKeyAuthority(): Promise<void> {
+    if (this.modelKeyAuthorityInitialization) return this.modelKeyAuthorityInitialization;
+    if (this.modelKeyAuthorityReady || this.modelKeyAuthorityFailureLatched)
+      return Promise.resolve();
+    const generation = this.modelKeyAuthorityGeneration;
+    const request = (async () => {
+      try {
+        if (!(await this.backgroundSecureStorageReady())) return;
+        const credentials = await this.readCredentials(true);
+        if (generation !== this.modelKeyAuthorityGeneration) return;
+        this.publishModelKeyAuthority(credentials);
+      } catch {
+        if (generation === this.modelKeyAuthorityGeneration) {
+          this.modelKeyAuthorityFailureLatched = true;
+        }
+      }
+    })().finally(() => {
+      if (this.modelKeyAuthorityInitialization === request) {
+        this.modelKeyAuthorityInitialization = null;
+      }
+    });
+    this.modelKeyAuthorityInitialization = request;
+    return request;
+  }
+
+  async readManagedModelKeyForBackend(): Promise<ManagedModelKeyBrokerResult> {
+    if (!this.managedKeyBrokerEnabled) return { ok: false, code: 'unavailable' };
+    if (!this.modelKeyAuthorityReady || this.modelKeyAuthorityFailureLatched) {
+      return { ok: false, code: 'unavailable' };
+    }
+    if (this.modelKeyAuthorityBlocked) return { ok: false, code: 'revoked' };
+    const credentials = this.modelKeyAuthority;
+    const key = credentials ? stagedModelKey(credentials) : null;
+    return { ok: true, key };
+  }
+
+  async managedModelKeyMatchesForBackend(sha256: string): Promise<ManagedModelKeyBrokerResult> {
+    if (!this.managedKeyBrokerEnabled) return { ok: false, code: 'unavailable' };
+    if (!/^[a-f0-9]{64}$/.test(sha256)) return { ok: false, code: 'invalid_request' };
+    if (!this.modelKeyAuthorityReady || this.modelKeyAuthorityFailureLatched) {
+      return { ok: false, code: 'unavailable' };
+    }
+    if (this.modelKeyAuthorityBlocked) return { ok: true, matches: false };
+    const credentials = this.modelKeyAuthority;
+    return { ok: true, matches: !!credentials && activeModelKeyMatches(credentials, sha256) };
+  }
+
+  private blockManagedModelKeyAuthority(): void {
+    if (!this.managedKeyBrokerEnabled) return;
+    this.modelKeyAuthorityBlocked = true;
+    this.modelKeyAuthorityGeneration += 1;
+    this.modelKeyAuthority = null;
+  }
+
+  private enableManagedModelKeyAuthority(): void {
+    if (!this.managedKeyBrokerEnabled) return;
+    this.modelKeyAuthorityBlocked = false;
+    this.modelKeyAuthorityGeneration += 1;
+    this.modelKeyAuthorityFailureLatched = false;
+  }
+
+  private retryManagedModelKeyAuthorityAfterExplicitUnlock(credentials: StoredCredentials): void {
+    if (!this.managedKeyBrokerEnabled || this.modelKeyAuthorityBlocked) return;
+    // A deliberate account action has just unlocked the encrypted envelope.
+    // Invalidate any earlier startup load so it cannot publish stale state.
+    this.modelKeyAuthorityGeneration += 1;
+    this.modelKeyAuthorityFailureLatched = false;
+    this.publishModelKeyAuthority(credentials);
+  }
+
+  private publishModelKeyAuthority(credentials: StoredCredentials | null): void {
+    if (!this.managedKeyBrokerEnabled) return;
+    if (this.modelKeyAuthorityFailureLatched) return;
+    if (this.modelKeyAuthorityBlocked) {
+      this.modelKeyAuthority = null;
+      return;
+    }
+    this.modelKeyAuthority = credentials;
+    this.modelKeyAuthorityReady = true;
+  }
 
   getStatus(): Promise<GmAccountStatus> {
     if (this.statusRead) return this.statusRead;
@@ -135,13 +239,18 @@ export class GmAccountService {
 
   private async loadStatus(): Promise<GmAccountStatus> {
     const secureStorageAvailable = await this.backgroundSecureStorageReady();
-    if (!secureStorageAvailable) return statusFor(null, false);
+    if (!secureStorageAvailable) return statusFor(null, false, this.managedKeyBrokerEnabled);
     try {
       const credentials = await this.readCredentials(true);
       const pendingCleanup = await this.readPendingCleanups();
+      const legacyKeyCleanup = await this.readLegacyKeyCleanup(true);
       return {
-        ...statusFor(credentials, true),
-        remoteCleanupPending: pendingCleanup.some((cleanup) => cleanup.state === 'cleanup'),
+        ...statusFor(credentials, true, this.managedKeyBrokerEnabled),
+        remoteCleanupPending: pendingCleanup.some(
+          (cleanup) =>
+            cleanup.state === 'cleanup' && !cleanupRetainsStoredModelKey(credentials, cleanup)
+        ),
+        legacyKeyCleanupPending: legacyKeyCleanup !== null,
       };
     } catch (error) {
       this.latchBackgroundStorageFailure();
@@ -201,6 +310,7 @@ export class GmAccountService {
     if (await this.readCredentials(true)) {
       throw new Error('Sign out of the current SayGM connection before starting another sign-in.');
     }
+    this.enableManagedModelKeyAuthority();
     if (
       this.deviceGenerations.get(windowId) !== generation ||
       this.operationGeneration !== operationGeneration
@@ -291,6 +401,7 @@ export class GmAccountService {
         accessToken: tokens.access_token,
         refreshToken: tokens.refresh_token,
         providerConfigured: false,
+        managedProviderKeyState: 'pending',
       };
       if (!this.isCurrentDeviceLogin(windowId, pending)) {
         await this.revokeSessionForCleanup(initial, acpTargets);
@@ -383,7 +494,7 @@ export class GmAccountService {
       this.pendingLogins.delete(windowId);
       return {
         status: 'connected',
-        account: statusFor({ version: 1, ...credentials }, true),
+        account: statusFor({ version: 1, ...credentials }, true, this.managedKeyBrokerEnabled),
       };
     });
   }
@@ -589,30 +700,41 @@ export class GmAccountService {
       this.assertOperationCurrent(generation);
       if (acpTargets.length === 0)
         throw new Error('The SayGM local model service is not available yet.');
-      const sha256 = keyHash(key);
       const credentials: StoredCredentials = {
         version: 1,
         mode: 'api_key',
         key,
         keyPrefix: key.slice(0, 8),
         providerConfigured: false,
+        keyAuthorityState: 'pending',
       };
+      this.enableManagedModelKeyAuthority();
       await this.writeCredentials(credentials);
       try {
         await saveProviderKeyToTargets(this.provider, acpTargets, key);
         this.assertOperationCurrent(generation);
-        const configured: StoredCredentials = { ...credentials, providerConfigured: true };
+        const configured: StoredCredentials = {
+          ...credentials,
+          providerConfigured: true,
+          keyAuthorityState: 'active',
+        };
         await this.writeCredentials(configured);
-        return statusFor(configured, true);
+        return statusFor(configured, true, this.managedKeyBrokerEnabled);
       } catch (error) {
-        const cleanup = await Promise.allSettled(
-          acpTargets.map((target) => this.provider.clearApiKeyIfMatches(target, sha256))
-        );
-        if (cleanup.every((result) => result.status === 'fulfilled')) {
-          await this.deleteCredentialsIfApiKeyMatches(sha256);
+        if (!this.managedKeyBrokerEnabled) {
+          const cleanup = await Promise.allSettled(
+            acpTargets.map((target) => this.provider.clearApiKeyIfMatches(target, keyHash(key)))
+          );
+          if (cleanup.every((result) => result.status === 'fulfilled')) {
+            await this.deleteCredentialsIfApiKeyMatches(keyHash(key));
+          }
         }
         throw new Error(
-          `SayGM Desktop could not securely store the API key. ${safeReason(error)}`,
+          `${
+            this.managedKeyBrokerEnabled
+              ? 'SayGM saved the API key securely, but local model setup needs a retry.'
+              : 'SayGM Desktop could not securely store the API key.'
+          } ${safeReason(error)}`,
           { cause: error }
         );
       }
@@ -624,28 +746,58 @@ export class GmAccountService {
     return this.exclusive(async () => {
       const generation = this.operationGeneration;
       const credentials = await this.requireCredentials();
+      this.retryManagedModelKeyAuthorityAfterExplicitUnlock(credentials);
       if (acpTargets.length === 0)
         throw new Error('The SayGM local model service is not available yet.');
       if (credentials.mode === 'api_key') {
-        if (credentials.providerConfigured) return statusFor(credentials, true);
-        const digest = keyHash(credentials.key);
+        if (this.managedKeyBrokerEnabled && credentials.keyAuthorityState === 'disabled') {
+          throw new Error(
+            'This SayGM key was disabled during sign out. Connect again before setting up a key.'
+          );
+        }
+        if (!this.managedKeyBrokerEnabled && credentials.providerConfigured) {
+          return statusFor(credentials, true, this.managedKeyBrokerEnabled);
+        }
+        if (
+          credentials.providerConfigured &&
+          activeModelKeyMatches(credentials, keyHash(credentials.key))
+        ) {
+          return statusFor(credentials, true, this.managedKeyBrokerEnabled);
+        }
         try {
+          const staged: ApiKeyCredentials & { version: 1 } = {
+            ...credentials,
+            providerConfigured: false,
+            keyAuthorityState: 'pending',
+          };
+          await this.writeCredentials(staged);
           await saveProviderKeyToTargets(this.provider, acpTargets, credentials.key);
           this.assertOperationCurrent(generation);
-          const updated = { ...credentials, providerConfigured: true };
+          const updated = {
+            ...staged,
+            providerConfigured: true,
+            keyAuthorityState: 'active' as const,
+          };
           await this.writeCredentials(updated);
-          return statusFor(updated, true);
+          return statusFor(updated, true, this.managedKeyBrokerEnabled);
         } catch (error) {
-          const cleanup = await Promise.allSettled(
-            acpTargets.map((target) => this.provider.clearApiKeyIfMatches(target, digest))
-          );
-          if (cleanup.every((result) => result.status === 'fulfilled')) {
-            await this.writeCredentials({ ...credentials, providerConfigured: false });
-          }
+          this.publishModelKeyAuthority({
+            ...credentials,
+            providerConfigured: false,
+            keyAuthorityState: 'pending',
+          });
           throw error;
         }
       }
-      if (credentials.providerConfigured) return statusFor(credentials, true);
+      if (!this.managedKeyBrokerEnabled && credentials.providerConfigured) {
+        return statusFor(credentials, true, this.managedKeyBrokerEnabled);
+      }
+      if (
+        credentials.managedProviderKeyHash &&
+        activeModelKeyMatches(credentials, credentials.managedProviderKeyHash)
+      ) {
+        return statusFor(credentials, true, this.managedKeyBrokerEnabled);
+      }
       const updated = await this.configureSessionProvider(
         credentials,
         acpTargets,
@@ -656,22 +808,17 @@ export class GmAccountService {
         await this.writeCredentials({ version: 1, ...updated });
         await this.markCleanupActive(updated.sessionId);
       } catch (error) {
-        if (updated.managedProviderKeyId && updated.managedProviderKeyHash) {
-          await this.cleanupManagedKey(
-            updated,
-            updated.managedProviderKeyId,
-            updated.managedProviderKeyHash,
-            acpTargets,
-            false
-          );
-        }
-        throw error;
+        throw new Error(
+          'The encrypted model key is saved and can be reused. SayGM could not finish local setup; retry setup.',
+          { cause: error }
+        );
       }
-      return statusFor({ version: 1, ...updated }, true);
+      return statusFor({ version: 1, ...updated }, true, this.managedKeyBrokerEnabled);
     });
   }
 
   async logout(acpTargets: GmAcpTarget[]): Promise<{ warning?: string }> {
+    this.blockManagedModelKeyAuthority();
     this.operationGeneration += 1;
     this.invalidateDeviceLogins();
     return this.exclusive(async () => {
@@ -679,23 +826,47 @@ export class GmAccountService {
       const credentials = await this.readCredentials();
       if (!credentials) return {};
       if (credentials.mode === 'api_key') {
-        if (acpTargets.length === 0) {
-          return {
-            warning: 'Reconnect the local SayGM service to remove the API key from secure storage.',
-          };
+        if (!this.managedKeyBrokerEnabled) {
+          if (acpTargets.length === 0) {
+            return {
+              warning:
+                'Reconnect the local SayGM service to remove the API key from secure storage.',
+            };
+          }
+          const results = await Promise.allSettled(
+            acpTargets.map((target) =>
+              this.provider.clearApiKeyIfMatches(target, keyHash(credentials.key))
+            )
+          );
+          if (results.some((result) => result.status === 'rejected')) {
+            return {
+              warning:
+                'The API key could not be cleared from every local SayGM service. Reconnect and try again.',
+            };
+          }
+          await this.deleteCredentials();
+          return {};
         }
+        await this.writeCredentials({
+          ...credentials,
+          providerConfigured: false,
+          keyAuthorityState: 'disabled',
+        });
         const sha256 = keyHash(credentials.key);
-        const results = await Promise.allSettled(
-          acpTargets.map((target) => this.provider.clearApiKeyIfMatches(target, sha256))
-        );
-        if (results.some((result) => result.status === 'rejected')) {
-          return {
-            warning:
-              'The API key could not be cleared from every local SayGM service. Reconnect the service and try again.',
-          };
-        }
+        await this.writeLegacyKeyCleanup(sha256);
         await this.deleteCredentials();
-        return {};
+        return {
+          warning:
+            'The API key was removed from SayGM. An older backend copy may remain in Keychain; use Remove legacy key to clear it.',
+        };
+      }
+
+      if (this.managedKeyBrokerEnabled) {
+        await this.writeCredentials({
+          ...credentials,
+          providerConfigured: false,
+          managedProviderKeyState: 'disabled',
+        });
       }
 
       let warning: string | undefined;
@@ -722,7 +893,11 @@ export class GmAccountService {
           warning = 'The SayGM model key could not be revoked remotely.';
         }
       }
-      if (credentials.managedProviderKeyHash && acpTargets.length > 0) {
+      if (
+        !this.managedKeyBrokerEnabled &&
+        credentials.managedProviderKeyHash &&
+        acpTargets.length > 0
+      ) {
         const results = await Promise.allSettled(
           acpTargets.map((target) =>
             this.provider.clearApiKeyIfMatches(target, credentials.managedProviderKeyHash!)
@@ -730,18 +905,35 @@ export class GmAccountService {
         );
         providerKeyCleared = results.every((result) => result.status === 'fulfilled');
       }
-      if (!credentials.managedProviderKeyHash && managedKeyRevoked) {
-        // Remote revocation makes an unidentifiable stale local copy unusable.
+      if (
+        !this.managedKeyBrokerEnabled &&
+        !credentials.managedProviderKeyHash &&
+        managedKeyRevoked
+      ) {
+        providerKeyCleared = true;
+      }
+      if (this.managedKeyBrokerEnabled && managedKeyRevoked) {
         providerKeyCleared = true;
       }
       if (!managedKeyRevoked && !providerKeyCleared) {
         return {
-          warning:
-            'The managed SayGM key is still active and could not be cleared from local secure storage. Your connection remains active; try disconnecting again.',
+          warning: this.managedKeyBrokerEnabled
+            ? 'The SayGM model key is disabled on this desktop, but remote revocation and local cleanup are still pending. Retry sign out.'
+            : 'Your SayGM connection remains active because remote revocation and local cleanup are still pending. Retry sign out.',
         };
       }
 
       let sessionRevoked = false;
+      if (this.managedKeyBrokerEnabled && credentials.managedProviderKeyHash && managedKeyRevoked) {
+        try {
+          await this.writeLegacyKeyCleanup(credentials.managedProviderKeyHash);
+        } catch {
+          return {
+            warning:
+              'The model key was revoked remotely, but SayGM could not save the legacy-key cleanup note. Sign out again to finish safely.',
+          };
+        }
+      }
       // Keep refresh credentials usable until a remotely managed model key has
       // been revoked. Otherwise a failed key revocation could become permanent.
       if (managedKeyRevoked) {
@@ -796,6 +988,38 @@ export class GmAccountService {
     });
   }
 
+  async clearLegacyApiKey(acpTargets: GmAcpTarget[]): Promise<{ removed: boolean }> {
+    return this.exclusive(async () => {
+      const pending = await this.readLegacyKeyCleanup();
+      if (!pending) return { removed: true };
+      const credentials = await this.readCredentials();
+      if (
+        credentials &&
+        pending.sha256s.some((sha256) => activeModelKeyMatches(credentials, sha256))
+      ) {
+        throw new Error('Sign out of the matching SayGM account before removing its legacy key.');
+      }
+      if (acpTargets.length === 0 || !this.provider.clearLegacyApiKeyIfMatches) {
+        throw new Error('Reconnect the local SayGM service before removing the legacy key.');
+      }
+      let removed = false;
+      try {
+        for (const sha256 of pending.sha256s) {
+          for (const target of acpTargets) {
+            removed = (await this.provider.clearLegacyApiKeyIfMatches(target, sha256)) || removed;
+          }
+        }
+      } catch (cause) {
+        throw new Error(
+          'SayGM could not remove the legacy key from every local service. Retry this cleanup.',
+          { cause }
+        );
+      }
+      await this.deleteLegacyKeyCleanup();
+      return { removed };
+    });
+  }
+
   private async configureSessionProvider(
     credentials: SessionCredentials,
     acpTargets: GmAcpTarget[],
@@ -805,7 +1029,15 @@ export class GmAccountService {
       throw new Error('The SayGM local model service is not available yet.');
     if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
 
-    if (credentials.providerConfigured) return credentials;
+    if (
+      (!this.managedKeyBrokerEnabled && credentials.providerConfigured) ||
+      (credentials.providerConfigured &&
+        activeModelKeyMatches(
+          { version: 1, ...credentials },
+          credentials.managedProviderKeyHash ?? ''
+        ))
+    )
+      return credentials;
     let oldCleanup = (await this.readPendingCleanups()).find(
       (cleanup) => cleanup.sessionId === credentials.sessionId
     );
@@ -813,41 +1045,14 @@ export class GmAccountService {
       throw new Error('This SayGM session is being signed out. Connect again before model setup.');
     }
 
-    if (credentials.managedProviderKeyId || credentials.managedProviderKeyHash) {
-      if (!credentials.managedProviderKeyId || !credentials.managedProviderKeyHash) {
-        throw new Error(
-          'The saved SayGM model key ownership record is incomplete. Sign out and connect again.'
-        );
-      }
-      const cleaned = await this.cleanupManagedKey(
-        credentials,
-        credentials.managedProviderKeyId,
-        credentials.managedProviderKeyHash,
-        acpTargets,
-        false
-      );
-      credentials = {
-        ...credentials,
-        accessToken: cleaned.accessToken,
-        refreshToken: cleaned.refreshToken,
-      };
-      const remaining = (await this.readPendingCleanups()).some(
-        (cleanup) => cleanup.sessionId === credentials.sessionId
-      );
-      if (remaining)
-        throw new Error(
-          'A previous SayGM model key still needs cleanup before setup can continue.'
-        );
-      oldCleanup = undefined;
-      credentials = {
-        ...credentials,
-        managedProviderKeyId: undefined,
-        managedProviderKeyHash: undefined,
-        managedProviderKey: undefined,
-      };
-    }
-
-    if (oldCleanup) {
+    const storedKeyIsRetained =
+      oldCleanup !== undefined &&
+      credentials.managedProviderKeyId === oldCleanup.managedProviderKeyId &&
+      credentials.managedProviderKeyHash === oldCleanup.managedProviderKeyHash &&
+      typeof credentials.managedProviderKey === 'string' &&
+      keyHash(credentials.managedProviderKey) === credentials.managedProviderKeyHash &&
+      credentials.managedProviderKeyState !== 'disabled';
+    if (oldCleanup && !storedKeyIsRetained) {
       if (
         oldCleanup.state !== 'cleanup' ||
         !oldCleanup.managedProviderKeyId ||
@@ -857,11 +1062,20 @@ export class GmAccountService {
           'A previous SayGM model key still needs cleanup before setup can continue.'
         );
       }
+      const cleanupKeyId = oldCleanup.managedProviderKeyId;
+      const cleanupKeyHash = oldCleanup.managedProviderKeyHash!;
       if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+      if (credentials.managedProviderKeyId === cleanupKeyId && !oldCleanup.managedKeyRevoked) {
+        const existingStatus = await this.managedProviderKeyStatus(credentials, cleanupKeyId);
+        credentials = { ...credentials, ...existingStatus.credentials };
+        if (existingStatus.active) {
+          throw missingManagedKeyRecoveryError();
+        }
+      }
       const cleaned = await this.cleanupManagedKey(
         credentials,
-        oldCleanup.managedProviderKeyId,
-        oldCleanup.managedProviderKeyHash!,
+        cleanupKeyId,
+        cleanupKeyHash,
         acpTargets,
         false
       );
@@ -879,8 +1093,70 @@ export class GmAccountService {
         accessToken: cleaned.accessToken,
         refreshToken: cleaned.refreshToken,
       };
+      if (credentials.managedProviderKeyId === cleanupKeyId) {
+        credentials = {
+          ...credentials,
+          managedProviderKeyId: undefined,
+          managedProviderKeyHash: undefined,
+          managedProviderKey: undefined,
+          managedProviderKeyState: undefined,
+        };
+      }
+      oldCleanup = undefined;
+    }
+
+    if (credentials.managedProviderKeyId || credentials.managedProviderKeyHash) {
+      if (
+        !credentials.managedProviderKeyId ||
+        !/^[a-f0-9]{64}$/.test(credentials.managedProviderKeyHash ?? '')
+      ) {
+        throw new Error(
+          'The saved SayGM model key ownership record is incomplete. Sign out and connect again.'
+        );
+      }
+      const savedKeyId = credentials.managedProviderKeyId;
+      if (credentials.managedProviderKeyState === 'disabled') {
+        throw new Error(
+          'This SayGM model key was disabled during sign out. Reconnect to set up a new key.'
+        );
+      }
+      const savedKey = credentials.managedProviderKey;
+      const savedKeyMatchesRecord =
+        typeof savedKey === 'string' && keyHash(savedKey) === credentials.managedProviderKeyHash;
+      const keyStatus = await this.managedProviderKeyStatus(credentials, savedKeyId);
+      const active = keyStatus.active;
+      credentials = { ...credentials, ...keyStatus.credentials };
+      if (savedKeyMatchesRecord && active) {
+        if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+        await saveProviderKeyToTargets(this.provider, acpTargets, savedKey);
+        if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+        return {
+          ...credentials,
+          providerConfigured: true,
+          managedProviderKeyState: 'active',
+        };
+      }
+      if (!savedKeyMatchesRecord && active) {
+        throw missingManagedKeyRecoveryError();
+      }
+      if (oldCleanup && oldCleanup.managedProviderKeyId === credentials.managedProviderKeyId) {
+        await this.removePendingCleanup(credentials.sessionId);
+        oldCleanup = undefined;
+      }
+      credentials = {
+        ...credentials,
+        providerConfigured: false,
+        managedProviderKeyId: undefined,
+        managedProviderKeyHash: undefined,
+        managedProviderKey: undefined,
+        managedProviderKeyState: undefined,
+      };
     }
     if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+
+    if (oldCleanup) {
+      throw new Error('A previous SayGM model key still needs cleanup before setup can continue.');
+    }
 
     let current = credentials;
     const created = await sessionRequest(
@@ -898,6 +1174,14 @@ export class GmAccountService {
     const key = typeof created.body.secret === 'string' ? created.body.secret : '';
     if (!keyId || !key) throw new Error('SayGM returned an unexpected model key response.');
     const digest = keyHash(key);
+    const staged: SessionCredentials = {
+      ...current,
+      providerConfigured: false,
+      managedProviderKeyId: keyId,
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    };
     const pendingCleanup: PendingCleanup = {
       sessionId: current.sessionId,
       accessToken: current.accessToken,
@@ -910,24 +1194,62 @@ export class GmAccountService {
       managedProviderKeyHash: digest,
       state: 'cleanup',
     };
-    await this.writePendingCleanup(pendingCleanup);
-    if (!stillCurrent()) {
-      await this.cleanupManagedKey(current, keyId, digest, acpTargets, false);
-      throw new Error('The SayGM connection was cancelled.');
-    }
     try {
-      await saveProviderKeyToTargets(this.provider, acpTargets, key);
-      if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+      await this.writeCredentials({ version: 1, ...staged });
+      await this.writePendingCleanup(pendingCleanup);
     } catch (error) {
-      await this.cleanupManagedKey(current, keyId, digest, acpTargets, false);
-      throw error;
+      this.blockManagedModelKeyAuthority();
+      let revokeConfirmed = false;
+      try {
+        const response = await sessionRequest(
+          current,
+          'DELETE',
+          `/keys/${encodeURIComponent(keyId)}`,
+          undefined,
+          (rotated) => this.persistRotatedTokens(rotated)
+        );
+        revokeConfirmed = response.status < 400 || response.status === 404;
+      } catch {
+        // Keep a cleanup record if the compensating request cannot be confirmed.
+      }
+      if (!revokeConfirmed) await this.writePendingCleanup(pendingCleanup).catch(() => undefined);
+      throw new Error(
+        'SayGM created a model key but could not save its encrypted recovery record. The key was not configured; restart SayGM before retrying setup.',
+        { cause: error }
+      );
+    }
+    if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+    await saveProviderKeyToTargets(this.provider, acpTargets, key);
+    if (!stillCurrent()) throw new Error('The SayGM connection was cancelled.');
+    return {
+      ...staged,
+      providerConfigured: true,
+      managedProviderKeyState: 'active',
+    };
+  }
+
+  private async managedProviderKeyStatus(
+    credentials: SessionCredentials,
+    keyId: string
+  ): Promise<{ active: boolean; credentials: SessionCredentials }> {
+    const response = await sessionRequest(credentials, 'GET', '/keys', undefined, (rotated) =>
+      this.persistRotatedTokens(rotated)
+    );
+    if (response.status >= 400) throw accountError(response, 'check the saved SayGM model key');
+    if (!isRecord(response.body) || !Array.isArray(response.body.keys)) {
+      throw new Error(
+        'SayGM returned an unexpected model key list. Your saved key was kept; retry setup.'
+      );
+    }
+    const item = response.body.keys.find((entry) => isRecord(entry) && entry.id === keyId);
+    if (item && (!isRecord(item) || !['active', 'revoked'].includes(String(item.status)))) {
+      throw new Error(
+        'SayGM returned an unknown model key status. Your saved key was kept; retry setup.'
+      );
     }
     return {
-      ...current,
-      providerConfigured: true,
-      managedProviderKeyId: keyId,
-      managedProviderKeyHash: digest,
-      managedProviderKey: key,
+      active: isRecord(item) && item.status === 'active',
+      credentials: response.credentials,
     };
   }
 
@@ -956,7 +1278,11 @@ export class GmAccountService {
     if (
       !credentials.providerConfigured ||
       !credentials.managedProviderKeyId ||
-      !credentials.managedProviderKeyHash
+      !credentials.managedProviderKeyHash ||
+      (this.managedKeyBrokerEnabled &&
+        (!credentials.managedProviderKey ||
+          keyHash(credentials.managedProviderKey) !== credentials.managedProviderKeyHash ||
+          credentials.managedProviderKeyState === 'disabled'))
     ) {
       throw new Error('Finish SayGM model setup before managing inference guardrails.');
     }
@@ -1025,6 +1351,68 @@ export class GmAccountService {
     return decoded;
   }
 
+  private async readLegacyKeyCleanup(
+    storageAlreadyChecked = false
+  ): Promise<LegacyKeyCleanup | null> {
+    let encrypted: string;
+    try {
+      encrypted = await fs.readFile(legacyKeyCleanupPath(), 'utf8');
+    } catch (error) {
+      if (isNodeError(error) && error.code === 'ENOENT') return null;
+      throw error;
+    }
+    if (!storageAlreadyChecked && !this.checkSecureStorageForOperation()) {
+      throw new Error('OS secure storage is unavailable.');
+    }
+    let decoded: unknown;
+    try {
+      decoded = JSON.parse(safeStorage.decryptString(Buffer.from(encrypted, 'base64')));
+    } catch {
+      this.latchBackgroundStorageFailure();
+      throw new Error('Saved legacy key cleanup data could not be unlocked.');
+    }
+    if (
+      !isRecord(decoded) ||
+      decoded.version !== 1 ||
+      !Array.isArray(decoded.sha256s) ||
+      decoded.sha256s.length > 64 ||
+      decoded.sha256s.some((digest) => typeof digest !== 'string' || !/^[a-f0-9]{64}$/.test(digest))
+    ) {
+      throw new Error('Saved legacy key cleanup data is invalid.');
+    }
+    return { version: 1, sha256s: [...new Set(decoded.sha256s as string[])] };
+  }
+
+  private async writeLegacyKeyCleanup(sha256: string): Promise<void> {
+    if (!/^[a-f0-9]{64}$/.test(sha256))
+      throw new Error('The legacy key cleanup record is invalid.');
+    if (!this.checkSecureStorageForOperation())
+      throw new Error('OS secure storage is unavailable.');
+    const existing = await this.readLegacyKeyCleanup(true);
+    const sha256s = [...new Set([...(existing?.sha256s ?? []), sha256])];
+    if (sha256s.length > 64) {
+      throw new Error(
+        'Remove saved legacy API-key cleanups before signing out another manually configured key.'
+      );
+    }
+    const value: LegacyKeyCleanup = {
+      version: 1,
+      sha256s,
+    };
+    const encrypted = this.encryptSecureData(JSON.stringify(value));
+    const file = legacyKeyCleanupPath();
+    const temporary = `${file}.tmp`;
+    await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
+    await fs.writeFile(temporary, encrypted, { encoding: 'utf8', mode: 0o600 });
+    await fs.rename(temporary, file);
+    this.statusRead = null;
+  }
+
+  private async deleteLegacyKeyCleanup(): Promise<void> {
+    await fs.rm(legacyKeyCleanupPath(), { force: true });
+    this.statusRead = null;
+  }
+
   private async writeCredentials(
     credentials: StoredCredentials,
     storageAlreadyChecked = false
@@ -1035,9 +1423,13 @@ export class GmAccountService {
     const file = credentialsPath();
     const temporary = `${file}.tmp`;
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
-    const encrypted = this.encryptSecureData(JSON.stringify(credentials));
+    const persisted = this.modelKeyAuthorityBlocked
+      ? disableModelKeyAuthority(credentials)
+      : credentials;
+    const encrypted = this.encryptSecureData(JSON.stringify(persisted));
     await fs.writeFile(temporary, encrypted, { encoding: 'utf8', mode: 0o600 });
     await fs.rename(temporary, file);
+    this.publishModelKeyAuthority(persisted);
     this.statusRead = null;
   }
 
@@ -1054,6 +1446,9 @@ export class GmAccountService {
 
   private async deleteCredentials(): Promise<void> {
     await fs.rm(credentialsPath(), { force: true });
+    this.modelKeyAuthorityGeneration += 1;
+    this.modelKeyAuthority = null;
+    this.modelKeyAuthorityReady = true;
     this.statusRead = null;
   }
 
@@ -1078,7 +1473,7 @@ export class GmAccountService {
     if (
       credentials?.mode !== 'session' ||
       credentials.sessionId !== sessionId ||
-      !credentials.providerConfigured ||
+      !activeModelKeyMatches(credentials, credentials.managedProviderKeyHash ?? '') ||
       credentials.managedProviderKeyId !== cleanup.managedProviderKeyId ||
       credentials.managedProviderKeyHash !== cleanup.managedProviderKeyHash
     ) {
@@ -1412,13 +1807,11 @@ export class GmAccountService {
       const remaining: PendingCleanup[] = [];
       for (const cleanup of cleanups) {
         let current: PendingCleanup = { ...cleanup };
-        const isCommittedActiveKey =
-          stored?.mode === 'session' &&
-          stored.sessionId === current.sessionId &&
-          stored.providerConfigured &&
-          stored.managedProviderKeyId === current.managedProviderKeyId &&
-          stored.managedProviderKeyHash === current.managedProviderKeyHash;
-        if (isCommittedActiveKey) continue;
+        const retainedKey = cleanupRetainsStoredModelKey(stored, current);
+        if (retainedKey) {
+          remaining.push(current);
+          continue;
+        }
         current.state = 'cleanup';
         const liveSession =
           stored?.mode === 'session' && stored.sessionId === current.sessionId ? stored : null;
@@ -1892,9 +2285,14 @@ function cleanupPath(): string {
   return path.join(app.getPath('userData'), SAYGM_PRODUCT.cleanupCredentialsFile);
 }
 
+function legacyKeyCleanupPath(): string {
+  return path.join(app.getPath('userData'), LEGACY_KEY_CLEANUP_FILE);
+}
+
 function statusFor(
   credentials: StoredCredentials | null,
-  secureStorageAvailable: boolean
+  secureStorageAvailable: boolean,
+  managedKeyBrokerEnabled: boolean
 ): GmAccountStatus {
   if (!credentials) {
     return {
@@ -1906,18 +2304,23 @@ function statusFor(
       secureStorageAvailable,
       remoteCleanupPending: false,
       managedKeyAvailable: false,
+      legacyKeyCleanupPending: false,
     };
   }
   if (credentials.mode === 'api_key') {
+    const providerConfigured = !managedKeyBrokerEnabled
+      ? credentials.providerConfigured
+      : activeModelKeyMatches(credentials, keyHash(credentials.key));
     return {
       connected: true,
       mode: 'api_key',
       email: null,
       keyPrefix: credentials.keyPrefix,
-      providerConfigured: credentials.providerConfigured,
+      providerConfigured,
       secureStorageAvailable,
       remoteCleanupPending: false,
       managedKeyAvailable: false,
+      legacyKeyCleanupPending: false,
     };
   }
   return {
@@ -1925,14 +2328,89 @@ function statusFor(
     mode: 'session',
     email: credentials.email || null,
     keyPrefix: null,
-    providerConfigured: credentials.providerConfigured,
+    providerConfigured: !managedKeyBrokerEnabled
+      ? credentials.providerConfigured
+      : activeModelKeyMatches(credentials, credentials.managedProviderKeyHash ?? ''),
     secureStorageAvailable,
     remoteCleanupPending: false,
-    managedKeyAvailable:
-      credentials.providerConfigured &&
-      typeof credentials.managedProviderKeyId === 'string' &&
-      typeof credentials.managedProviderKeyHash === 'string',
+    legacyKeyCleanupPending: false,
+    managedKeyAvailable: !managedKeyBrokerEnabled
+      ? credentials.providerConfigured &&
+        typeof credentials.managedProviderKeyId === 'string' &&
+        typeof credentials.managedProviderKeyHash === 'string'
+      : activeModelKeyMatches(credentials, credentials.managedProviderKeyHash ?? '') &&
+        typeof credentials.managedProviderKeyId === 'string' &&
+        typeof credentials.managedProviderKeyHash === 'string' &&
+        typeof credentials.managedProviderKey === 'string' &&
+        keyHash(credentials.managedProviderKey) === credentials.managedProviderKeyHash,
   };
+}
+
+function cleanupRetainsStoredModelKey(
+  credentials: StoredCredentials | null,
+  cleanup: PendingCleanup
+): boolean {
+  const sameOwnedKey =
+    credentials?.mode === 'session' &&
+    credentials.sessionId === cleanup.sessionId &&
+    credentials.managedProviderKeyId === cleanup.managedProviderKeyId &&
+    credentials.managedProviderKeyHash === cleanup.managedProviderKeyHash;
+  if (
+    !sameOwnedKey ||
+    cleanup.revokeSession ||
+    cleanup.managedKeyRevoked ||
+    credentials?.mode !== 'session' ||
+    credentials.managedProviderKeyState === 'disabled'
+  ) {
+    return false;
+  }
+  return (
+    credentials.providerConfigured ||
+    credentials.managedProviderKeyState === 'pending' ||
+    (typeof credentials.managedProviderKey === 'string' &&
+      keyHash(credentials.managedProviderKey) === credentials.managedProviderKeyHash)
+  );
+}
+
+function stagedModelKey(credentials: StoredCredentials): string | null {
+  if (credentials.mode === 'api_key') {
+    return credentials.keyAuthorityState === 'disabled' ? null : credentials.key;
+  }
+  if (
+    credentials.managedProviderKeyState === 'disabled' ||
+    !credentials.managedProviderKey ||
+    !credentials.managedProviderKeyHash ||
+    keyHash(credentials.managedProviderKey) !== credentials.managedProviderKeyHash
+  ) {
+    return null;
+  }
+  return credentials.managedProviderKey;
+}
+
+function activeModelKeyMatches(credentials: StoredCredentials, sha256: string): boolean {
+  if (!/^[a-f0-9]{64}$/.test(sha256) || !credentials.providerConfigured) return false;
+  if (credentials.mode === 'api_key') {
+    return (
+      credentials.keyAuthorityState !== 'disabled' &&
+      (credentials.keyAuthorityState === undefined || credentials.keyAuthorityState === 'active') &&
+      keyHash(credentials.key) === sha256
+    );
+  }
+  return (
+    credentials.managedProviderKeyState !== 'disabled' &&
+    (credentials.managedProviderKeyState === undefined ||
+      credentials.managedProviderKeyState === 'active') &&
+    typeof credentials.managedProviderKey === 'string' &&
+    typeof credentials.managedProviderKeyHash === 'string' &&
+    credentials.managedProviderKeyHash === sha256 &&
+    keyHash(credentials.managedProviderKey) === sha256
+  );
+}
+
+function disableModelKeyAuthority(credentials: StoredCredentials): StoredCredentials {
+  return credentials.mode === 'api_key'
+    ? { ...credentials, providerConfigured: false, keyAuthorityState: 'disabled' }
+    : { ...credentials, providerConfigured: false, managedProviderKeyState: 'disabled' };
 }
 
 function accountError(response: JsonResponse, action: string): Error {
@@ -2151,14 +2629,18 @@ function isStoredCredentials(value: unknown): value is StoredCredentials {
       typeof value.accessToken === 'string' &&
       typeof value.refreshToken === 'string' &&
       typeof value.providerConfigured === 'boolean' &&
-      (value.managedProviderKey === undefined || typeof value.managedProviderKey === 'string')
+      (value.managedProviderKey === undefined || typeof value.managedProviderKey === 'string') &&
+      (value.managedProviderKeyState === undefined ||
+        ['pending', 'active', 'disabled'].includes(value.managedProviderKeyState as string))
     );
   }
   return (
     value.mode === 'api_key' &&
     typeof value.key === 'string' &&
     typeof value.keyPrefix === 'string' &&
-    typeof value.providerConfigured === 'boolean'
+    typeof value.providerConfigured === 'boolean' &&
+    (value.keyAuthorityState === undefined ||
+      ['pending', 'active', 'disabled'].includes(value.keyAuthorityState as string))
   );
 }
 
@@ -2212,6 +2694,12 @@ function stableJson(value: unknown): string {
 
 function safeReason(error: unknown): string {
   return error instanceof Error ? error.message : 'Try again.';
+}
+
+function missingManagedKeyRecoveryError(): Error {
+  return new Error(
+    'SayGM found an active model key, but its encrypted secret is missing or does not match. Sign out, then reconnect to replace it safely.'
+  );
 }
 
 function isNodeError(error: unknown): error is Error & { code: string } {

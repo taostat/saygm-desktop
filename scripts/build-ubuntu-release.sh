@@ -110,13 +110,13 @@ sed -i -e 's|^Exec=.*|Exec=/usr/bin/saygm %U|' -e 's|^Icon=.*|Icon=saygm|' "$des
 grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
 grep -Fx 'Icon=saygm' "$desktop_file"
 
-package_goose="$package_root/usr/lib/saygm/resources/bin/goose"
-if [[ ! -x "$package_goose" ]]; then
-  echo "Debian package layout changed: missing /usr/lib/saygm/resources/bin/goose." >&2
+package_backend="$package_root/usr/lib/saygm/resources/bin/saygm-agent"
+if [[ ! -x "$package_backend" ]]; then
+  echo "Debian package layout changed: missing /usr/lib/saygm/resources/bin/saygm-agent." >&2
   find "$package_root/usr" -maxdepth 6 -type f -print >&2
   exit 1
 fi
-if [[ "$(sha256sum "$package_goose" | cut -d ' ' -f 1)" != "$source_hash" ]]; then
+if [[ "$(sha256sum "$package_backend" | cut -d ' ' -f 1)" != "$source_hash" ]]; then
   echo "Debian backend differs from the Cargo release binary." >&2
   exit 1
 fi
@@ -140,7 +140,7 @@ while IFS= read -r library; do
   fi
   printf 'Goose runtime library %s is provided by %s\n' "$library" "$owner"
   runtime_packages+=("$owner")
-done < <(ldd "$package_goose" | awk '/=> \// {sub(/^.*=> /, ""); sub(/ .*/, ""); print} /^[[:space:]]*\// {print $1}')
+done < <(ldd "$package_backend" | awk '/=> \// {sub(/^.*=> /, ""); sub(/ .*/, ""); print} /^[[:space:]]*\// {print $1}')
 
 python3 - "$package_root/DEBIAN/control" "${runtime_packages[@]}" <<'PY'
 import pathlib

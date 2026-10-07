@@ -67,7 +67,7 @@ try {
     : path.resolve(path.dirname(launcher), launcherLink);
   assert.equal(resolvedLauncher, path.join(packageRoot, 'usr/lib/saygm/SayGM'));
   const debApp = path.join(packageRoot, 'usr/lib/saygm/SayGM');
-  const debBackend = path.join(packageRoot, 'usr/lib/saygm/resources/bin/goose');
+  const debBackend = path.join(packageRoot, 'usr/lib/saygm/resources/bin/saygm-agent');
   assert((await fs.stat(debApp)).isFile());
   assert((await fs.stat(debBackend)).isFile());
 
@@ -75,8 +75,8 @@ try {
   const zipEntries = output(['unzip', '-Z1', args.zip]).split(String.fromCharCode(10)).filter(Boolean);
   const zipAppEntry = zipEntries.find((filename) => /\/SayGM$/.test(filename));
   const zipAsarEntry = zipEntries.find((filename) => filename.endsWith('/resources/app.asar'));
-  const zipBackendEntry = zipEntries.find((filename) => filename.endsWith('/resources/bin/goose'));
-  assert(debAsar && zipAppEntry && zipAsarEntry && zipBackendEntry, 'Debian and ZIP packages must include app ASAR and Goose backend');
+  const zipBackendEntry = zipEntries.find((filename) => filename.endsWith('/resources/bin/saygm-agent'));
+  assert(debAsar && zipAppEntry && zipAsarEntry && zipBackendEntry, 'Debian and ZIP packages must include app ASAR and SayGM backend');
   execFileSync('unzip', ['-tqq', args.zip]);
   execFileSync('unzip', ['-q', args.zip, zipAppEntry, zipAsarEntry, zipBackendEntry, '-d', zipRoot]);
   const zipApp = path.join(zipRoot, zipAppEntry);
@@ -145,7 +145,7 @@ try {
     zip_sha256: await sha256(args.zip),
     app_sha256: debAppHash,
     asar_sha256: debAsarHash,
-    goose_sha256: expectedBackendHash,
+    backend_sha256: expectedBackendHash,
     asar_package_version: debAppPackage.version,
     package_desktop_entry: path.relative(packageRoot, debDesktop),
     package_exec: '/usr/bin/saygm',

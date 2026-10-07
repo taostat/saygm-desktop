@@ -34,6 +34,7 @@
     "format:check": "prettier --check \"src/**/*.{ts,tsx,css,json}\"",
     "test": "vitest",
     "test:run": "vitest run",
+    "test:packaged-backend": "node --test scripts/rename-packaged-backend.test.cjs",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest run --coverage",
     "test:integration": "vitest run --config vitest.integration.config.ts",

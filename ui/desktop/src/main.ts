@@ -58,7 +58,11 @@ import type { GooseApp } from './types/apps';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
 import { WEB_PROTOCOLS } from './utils/urlSecurity';
 import { openExternalUrl } from './utils/openExternalUrl';
-import { registerGmAccountIpcHandlers } from './utils/gmAccountIpc';
+import {
+  gmAccountModelKeyBroker,
+  initializeGmAccountModelKeyAuthority,
+  registerGmAccountIpcHandlers,
+} from './utils/gmAccountIpc';
 import { SAYGM_PRODUCT } from './product/saygmProduct';
 import { buildCSP, leaseBackendOrigin, shouldApplyRendererCsp } from './utils/csp';
 import { resolveWorkingDir } from './utils/workingDir';
@@ -443,88 +447,102 @@ if (MAIN_WINDOW_VITE_DEV_SERVER_URL) {
   app.setAsDefaultProtocolClient(SAYGM_PRODUCT.protocolScheme);
 }
 
-// Apply single instance lock on Windows and Linux where it's needed for deep links
-// macOS uses the 'open-url' event instead
-let gotTheLock: boolean;
+// Keep one SayGM process as the authority for the encrypted account vault.
 let openUrlHandledLaunch = false;
-if (process.platform !== 'darwin') {
-  gotTheLock = app.requestSingleInstanceLock();
+const gotTheLock = app.requestSingleInstanceLock();
 
-  if (!gotTheLock) {
-    app.quit();
-  } else {
-    app.on('second-instance', (_event, commandLine) => {
-      const protocolUrl = commandLine.find((arg) =>
-        arg.startsWith(`${SAYGM_PRODUCT.protocolScheme}://`)
-      );
-      if (protocolUrl) {
-        const parsedUrl = new URL(protocolUrl);
-        // If it's a bot/recipe URL, handle it directly by creating a new window
-        if (parsedUrl.hostname === 'bot' || parsedUrl.hostname === 'recipe') {
-          app.whenReady().then(async () => {
-            const recentDirs = loadRecentDirs();
-            const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
-
-            const deeplinkData = parseRecipeDeeplink(protocolUrl);
-            const scheduledJobId = parsedUrl.searchParams.get('scheduledJob');
-
-            await createChat(app, {
-              dir: openDir || undefined,
-              recipeDeeplink: deeplinkData?.config,
-              scheduledJobId: scheduledJobId || undefined,
-              recipeParameters: deeplinkData?.parameters,
-            });
-          });
-          return; // Skip the rest of the handler
-        }
-
-        // Handle new-session URL by creating a fresh chat window
-        if (parsedUrl.hostname === 'new-session') {
-          app.whenReady().then(async () => {
-            const recentDirs = loadRecentDirs();
-            const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
-            const prompt = parsedUrl.searchParams.get('prompt') || undefined;
-            await createChat(app, {
-              dir: openDir || undefined,
-              initialMessage: prompt,
-              initialMessageNoAutoSubmit: prompt !== undefined,
-            });
-          });
-          return;
-        }
-
-        if (parsedUrl.hostname === 'resume') {
-          app.whenReady().then(async () => {
-            const recentDirs = loadRecentDirs();
-            const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
-            await createResumeChatWindow(parsedUrl, openDir || undefined);
-          });
-          return;
-        }
-
-        // For non-bot URLs, continue with normal handling
-        handleProtocolUrl(protocolUrl, parsedUrl);
-      }
-
-      // Only focus existing regular windows for non-bot/recipe URLs
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', (_event, commandLine) => {
+    const protocolUrl = commandLine.find((arg) =>
+      arg.startsWith(`${SAYGM_PRODUCT.protocolScheme}://`)
+    );
+    if (process.platform === 'darwin') {
+      // macOS delivers protocol URLs through open-url. Do not replay argv here.
       const regularWindows = getRegularWindows();
       if (regularWindows.length > 0) {
         const mainWindow = regularWindows[0];
-        if (mainWindow.isMinimized()) {
-          mainWindow.restore();
-        }
+        if (mainWindow.isMinimized()) mainWindow.restore();
         mainWindow.focus();
       } else if (!protocolUrl) {
         app.whenReady().then(async () => {
+          if (!gotTheLock || openUrlHandledLaunch || getRegularWindows().length > 0) return;
           const recentDirs = loadRecentDirs();
-          const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
-          await createChat(app, { dir: openDir || undefined });
+          await createChat(app, { dir: recentDirs[0] || undefined });
         });
       }
-    });
-  }
+      return;
+    }
+    if (protocolUrl) {
+      const parsedUrl = new URL(protocolUrl);
+      // If it's a bot/recipe URL, handle it directly by creating a new window
+      if (parsedUrl.hostname === 'bot' || parsedUrl.hostname === 'recipe') {
+        app.whenReady().then(async () => {
+          const recentDirs = loadRecentDirs();
+          const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
 
-  // Handle protocol URLs on Windows and Linux startup
+          const deeplinkData = parseRecipeDeeplink(protocolUrl);
+          const scheduledJobId = parsedUrl.searchParams.get('scheduledJob');
+
+          await createChat(app, {
+            dir: openDir || undefined,
+            recipeDeeplink: deeplinkData?.config,
+            scheduledJobId: scheduledJobId || undefined,
+            recipeParameters: deeplinkData?.parameters,
+          });
+        });
+        return; // Skip the rest of the handler
+      }
+
+      // Handle new-session URL by creating a fresh chat window
+      if (parsedUrl.hostname === 'new-session') {
+        app.whenReady().then(async () => {
+          const recentDirs = loadRecentDirs();
+          const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
+          const prompt = parsedUrl.searchParams.get('prompt') || undefined;
+          await createChat(app, {
+            dir: openDir || undefined,
+            initialMessage: prompt,
+            initialMessageNoAutoSubmit: prompt !== undefined,
+          });
+        });
+        return;
+      }
+
+      if (parsedUrl.hostname === 'resume') {
+        app.whenReady().then(async () => {
+          const recentDirs = loadRecentDirs();
+          const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
+          await createResumeChatWindow(parsedUrl, openDir || undefined);
+        });
+        return;
+      }
+
+      // For non-bot URLs, continue with normal handling
+      handleProtocolUrl(protocolUrl, parsedUrl);
+    }
+
+    // Only focus existing regular windows for non-bot/recipe URLs
+    const regularWindows = getRegularWindows();
+    if (regularWindows.length > 0) {
+      const mainWindow = regularWindows[0];
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    } else if (!protocolUrl) {
+      app.whenReady().then(async () => {
+        const recentDirs = loadRecentDirs();
+        const openDir = recentDirs.length > 0 ? recentDirs[0] : null;
+        await createChat(app, { dir: openDir || undefined });
+      });
+    }
+  });
+}
+
+if (process.platform !== 'darwin') {
+  // macOS routes launch URLs through open-url; Windows and Linux use argv.
   const protocolUrl = process.argv.find((arg) =>
     arg.startsWith(`${SAYGM_PRODUCT.protocolScheme}://`)
   );
@@ -593,6 +611,7 @@ async function createResumeChatWindow(parsedUrl: URL, dir?: string): Promise<boo
 }
 
 async function handleProtocolUrl(url: string, parsedUrl: URL) {
+  if (!gotTheLock) return;
   if (!url) return;
 
   const recentDirs = loadRecentDirs();
@@ -662,6 +681,7 @@ async function processProtocolUrl(url: string, parsedUrl: URL, window: BrowserWi
 let windowDeeplinkURL: string | null = null;
 
 app.on('open-url', async (_event, url) => {
+  if (!gotTheLock) return;
   if (process.platform !== 'win32') {
     const parsedUrl = new URL(url);
 
@@ -745,6 +765,7 @@ app.on('will-finish-launching', () => {
 // Handle drag-and-drop onto dock icon
 app.on('open-file', async (event, filePath) => {
   event.preventDefault();
+  if (!gotTheLock) return;
   await handleFileOpen(filePath);
 });
 
@@ -754,6 +775,7 @@ if (process.platform === 'darwin') {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   app.on('open-files' as any, async (event: any, filePaths: string[]) => {
     event.preventDefault();
+    if (!gotTheLock) return;
     for (const filePath of filePaths) {
       await handleFileOpen(filePath);
     }
@@ -761,6 +783,7 @@ if (process.platform === 'darwin') {
 }
 
 async function handleFileOpen(filePath: string) {
+  if (!gotTheLock) return;
   try {
     if (!filePath || typeof filePath !== 'string') {
       return;
@@ -1072,6 +1095,7 @@ const createChat = async (
   app: App,
   options: CreateChatOptions = {}
 ): Promise<BrowserWindow | undefined> => {
+  if (!gotTheLock) return undefined;
   const {
     initialMessage,
     initialMessageNoAutoSubmit,
@@ -1238,6 +1262,9 @@ const createChat = async (
 
     let gooseServeResult: Awaited<ReturnType<typeof startGooseServe>>;
     try {
+      if (process.platform === 'darwin') {
+        await initializeGmAccountModelKeyAuthority();
+      }
       gooseServeResult = await startGooseServe({
         serverSecret,
         dir: workingDir,
@@ -1251,6 +1278,8 @@ const createChat = async (
         resourcesPath: app.isPackaged ? process.resourcesPath : undefined,
         logger: log,
         diagnosticsDir: STARTUP_LOGS_DIR,
+        managedModelKeyBroker: process.platform === 'darwin' ? gmAccountModelKeyBroker : undefined,
+        managedModelKeyBrokerRequired: process.platform === 'darwin',
       });
       if (!gooseServeResult.certFingerprint) {
         await gooseServeResult.cleanup();
@@ -2507,6 +2536,7 @@ const registerGlobalShortcuts = () => {
 };
 
 async function appMain() {
+  if (!gotTheLock) return;
   powerMonitor.on('resume', () => {
     for (const window of BrowserWindow.getAllWindows()) {
       if (!window.isDestroyed()) {
@@ -3152,6 +3182,7 @@ async function appMain() {
 }
 
 app.whenReady().then(async () => {
+  if (!gotTheLock) return;
   try {
     await appMain();
   } catch (error) {

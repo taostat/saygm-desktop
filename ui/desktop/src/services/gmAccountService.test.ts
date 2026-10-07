@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import os from 'node:os';
 import path from 'node:path';
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
@@ -76,6 +77,464 @@ afterEach(async () => {
 });
 
 describe('GmAccountService lifecycle', () => {
+  it('serves the encrypted API key through the broker and denies inference until setup commits', async () => {
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'api_key',
+      key: 'gm_test_key',
+      keyPrefix: 'gm_test_',
+      providerConfigured: false,
+      keyAuthorityState: 'pending',
+    });
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.readManagedModelKeyForBackend()).resolves.toEqual({
+      ok: true,
+      key: 'gm_test_key',
+    });
+    await expect(
+      service.managedModelKeyMatchesForBackend(
+        createHash('sha256').update('gm_test_key').digest('hex')
+      )
+    ).resolves.toEqual({ ok: true, matches: false });
+
+    await expect(service.finishProviderSetup([targetA])).resolves.toMatchObject({
+      connected: true,
+      providerConfigured: true,
+    });
+    await expect(
+      service.managedModelKeyMatchesForBackend(
+        createHash('sha256').update('gm_test_key').digest('hex')
+      )
+    ).resolves.toEqual({ ok: true, matches: true });
+    expect(provider.saveApiKey).toHaveBeenCalledWith(targetA, 'gm_test_key');
+  });
+
+  it('reuses an active encrypted managed key on setup retry without creating or revoking a key', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    fetchMock.mockImplementation(async (input: FetchRequestInput, init?: FetchRequestInit) => {
+      if (String(input) === `${accountBase}/keys` && (init?.method ?? 'GET') === 'GET') {
+        return jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'active' }] });
+      }
+      throw new Error(`Unexpected test request: ${String(input)}`);
+    });
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.finishProviderSetup([targetA])).resolves.toMatchObject({
+      providerConfigured: true,
+      managedKeyAvailable: true,
+    });
+    expect(provider.saveApiKey).toHaveBeenCalledWith(targetA, key);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) => String(input) === `${accountBase}/keys` && init?.method === 'POST'
+      )
+    ).toBe(false);
+    expect(
+      fetchMock.mock.calls.some(
+        ([input, init]) =>
+          String(input) === `${accountBase}/keys/managed-existing` && init?.method === 'DELETE'
+      )
+    ).toBe(false);
+    const saved = JSON.parse(
+      Buffer.from(
+        await fs.readFile(path.join(userDataDirectory, 'saygm-account.safe'), 'utf8'),
+        'base64'
+      ).toString()
+    ) as Record<string, unknown>;
+    expect(saved).toMatchObject({
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKey: key,
+      managedProviderKeyHash: digest,
+      managedProviderKeyState: 'active',
+      providerConfigured: true,
+    });
+  });
+
+  it('keeps a saved key and never creates another when the active-key list request fails', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    fetchMock.mockResolvedValue(jsonResponse(503, { error: 'temporarily_unavailable' }));
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.finishProviderSetup([targetA])).rejects.toThrow('HTTP 503');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(provider.saveApiKey).not.toHaveBeenCalled();
+    const saved = JSON.parse(
+      Buffer.from(
+        await fs.readFile(path.join(userDataDirectory, 'saygm-account.safe'), 'utf8'),
+        'base64'
+      ).toString()
+    ) as Record<string, unknown>;
+    expect(saved).toMatchObject({
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKey: key,
+    });
+  });
+
+  it('requires deliberate recovery for an active remote key without a matching encrypted secret', async () => {
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: 'a'.repeat(64),
+      managedProviderKeyState: 'pending',
+    });
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'active' }] })
+    );
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.finishProviderSetup([targetA])).rejects.toThrow(
+      'active model key, but its encrypted secret is missing or does not match'
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(provider.saveApiKey).not.toHaveBeenCalled();
+    const saved = JSON.parse(
+      Buffer.from(
+        await fs.readFile(path.join(userDataDirectory, 'saygm-account.safe'), 'utf8'),
+        'base64'
+      ).toString()
+    ) as Record<string, unknown>;
+    expect(saved).toMatchObject({
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: 'a'.repeat(64),
+      providerConfigured: false,
+    });
+    expect(saved.managedProviderKey).toBeUndefined();
+  });
+
+  it('does not replace a saved key when the server returns an unknown key status', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'pending' }] })
+    );
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.finishProviderSetup([targetA])).rejects.toThrow(
+      'unknown model key status'
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(provider.saveApiKey).not.toHaveBeenCalled();
+  });
+
+  it('preserves refreshed session tokens while reusing the active managed key', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    let listCalls = 0;
+    fetchMock.mockImplementation(async (input: FetchRequestInput, init?: FetchRequestInit) => {
+      if (String(input) === `${accountBase}/keys`) {
+        listCalls += 1;
+        if (listCalls === 1) return jsonResponse(401, { error: 'expired_token' });
+        expect(new globalThis.Headers(init?.headers).get('authorization')).toBe('Bearer access-1');
+        return jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'active' }] });
+      }
+      if (String(input) === `${accountBase}/oauth/token`) {
+        return jsonResponse(200, tokens('access-1', 'refresh-1'));
+      }
+      throw new Error(`Unexpected test request: ${String(input)}`);
+    });
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.finishProviderSetup([targetA])).resolves.toMatchObject({
+      providerConfigured: true,
+    });
+    const saved = JSON.parse(
+      Buffer.from(
+        await fs.readFile(path.join(userDataDirectory, 'saygm-account.safe'), 'utf8'),
+        'base64'
+      ).toString()
+    ) as Record<string, unknown>;
+    expect(saved).toMatchObject({ accessToken: 'access-1', refreshToken: 'refresh-1' });
+    expect(listCalls).toBe(2);
+  });
+
+  it('keeps a reusable staged key out of pending cleanup and reuses it on retry', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    await writeEncryptedFixture('saygm-account-cleanup.safe', {
+      version: 1,
+      cleanups: [
+        {
+          sessionId: 'session-1',
+          accessToken: 'access-0',
+          refreshToken: 'refresh-0',
+          revokeSession: false,
+          sessionRevoked: false,
+          managedKeyRevoked: false,
+          providerKeyCleared: false,
+          managedProviderKeyId: 'managed-existing',
+          managedProviderKeyHash: digest,
+          state: 'cleanup',
+        },
+      ],
+    });
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'active' }] })
+    );
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.getStatus()).resolves.toMatchObject({ remoteCleanupPending: false });
+    await expect(service.retryPendingCleanup([targetA])).resolves.toBe(false);
+    await expect(service.finishProviderSetup([targetA])).resolves.toMatchObject({
+      providerConfigured: true,
+      managedKeyAvailable: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(false);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(provider.clearApiKeyIfMatches).not.toHaveBeenCalled();
+    expect(provider.saveApiKey).toHaveBeenCalledWith(targetA, key);
+  });
+
+  it.each([false, true])(
+    'does not background-revoke a committed legacy key without its local raw secret (broker=%s)',
+    async (brokerEnabled) => {
+      const digest = 'a'.repeat(64);
+      await writeEncryptedFixture('saygm-account.safe', {
+        version: 1,
+        mode: 'session',
+        sessionId: 'session-1',
+        email: 'test@saygm.com',
+        accessToken: 'access-0',
+        refreshToken: 'refresh-0',
+        providerConfigured: true,
+        managedProviderKeyId: 'managed-existing',
+        managedProviderKeyHash: digest,
+        managedProviderKeyState: 'active',
+      });
+      await writeEncryptedFixture('saygm-account-cleanup.safe', {
+        version: 1,
+        cleanups: [
+          {
+            sessionId: 'session-1',
+            accessToken: 'access-0',
+            refreshToken: 'refresh-0',
+            revokeSession: false,
+            sessionRevoked: false,
+            managedKeyRevoked: false,
+            providerKeyCleared: false,
+            managedProviderKeyId: 'managed-existing',
+            managedProviderKeyHash: digest,
+            state: 'active',
+          },
+        ],
+      });
+      const provider = providerBridge();
+      const service = new GmAccountService(provider, brokerEnabled);
+      await service.initializeManagedModelKeyAuthority();
+
+      await expect(service.retryPendingCleanup([targetA])).resolves.toBe(false);
+
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(provider.clearApiKeyIfMatches).not.toHaveBeenCalled();
+    }
+  );
+
+  it('continues a deliberate disabled-session cleanup', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'disabled',
+    });
+    await writeEncryptedFixture('saygm-account-cleanup.safe', {
+      version: 1,
+      cleanups: [
+        {
+          sessionId: 'session-1',
+          accessToken: 'access-0',
+          refreshToken: 'refresh-0',
+          revokeSession: true,
+          sessionRevoked: false,
+          managedKeyRevoked: false,
+          providerKeyCleared: false,
+          managedProviderKeyId: 'managed-existing',
+          managedProviderKeyHash: digest,
+          state: 'cleanup',
+        },
+      ],
+    });
+    fetchMock.mockImplementation(async (input: FetchRequestInput, init?: FetchRequestInit) => {
+      if (String(input) === `${accountBase}/keys/managed-existing` && init?.method === 'DELETE') {
+        return jsonResponse(204, null);
+      }
+      if (String(input) === `${accountBase}/oauth/revoke`) return jsonResponse(200, null);
+      throw new Error(
+        `Unexpected cleanup request: ${String(init?.method ?? 'GET')} ${String(input)}`
+      );
+    });
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.retryPendingCleanup([targetA])).resolves.toBe(true);
+
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'DELETE')).toBe(true);
+    expect(
+      fetchMock.mock.calls.some(([input]) => String(input) === `${accountBase}/oauth/revoke`)
+    ).toBe(true);
+    expect(provider.clearApiKeyIfMatches).toHaveBeenCalledWith(targetA, digest);
+  });
+
+  it('recovers broker authority only after explicit setup unlocks the encrypted key', async () => {
+    const key = 'gm_managed_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'session',
+      sessionId: 'session-1',
+      email: 'test@saygm.com',
+      accessToken: 'access-0',
+      refreshToken: 'refresh-0',
+      providerConfigured: false,
+      managedProviderKeyId: 'managed-existing',
+      managedProviderKeyHash: digest,
+      managedProviderKey: key,
+      managedProviderKeyState: 'pending',
+    });
+    fetchMock.mockResolvedValue(
+      jsonResponse(200, { keys: [{ id: 'managed-existing', status: 'active' }] })
+    );
+    const provider = providerBridge();
+    const service = new GmAccountService(provider, true);
+    electronState.throwOnDecrypt = true;
+    await service.initializeManagedModelKeyAuthority();
+    await expect(service.readManagedModelKeyForBackend()).resolves.toEqual({
+      ok: false,
+      code: 'unavailable',
+    });
+
+    electronState.throwOnDecrypt = false;
+    await expect(service.finishProviderSetup([targetA])).resolves.toMatchObject({
+      providerConfigured: true,
+    });
+    await expect(service.managedModelKeyMatchesForBackend(digest)).resolves.toEqual({
+      ok: true,
+      matches: true,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.some(([, init]) => init?.method === 'POST')).toBe(false);
+    expect(provider.saveApiKey).toHaveBeenCalledWith(targetA, key);
+  });
+
+  it('keeps startup key access denied when encrypted storage cannot be unlocked', async () => {
+    electronState.secureStorageAvailable = false;
+    const service = new GmAccountService(providerBridge(), true);
+
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.readManagedModelKeyForBackend()).resolves.toEqual({
+      ok: false,
+      code: 'unavailable',
+    });
+    await expect(service.managedModelKeyMatchesForBackend('a'.repeat(64))).resolves.toEqual({
+      ok: false,
+      code: 'unavailable',
+    });
+    expect(electronState.secureStorageChecks).toBe(1);
+    expect(electronState.decryptCalls).toBe(0);
+  });
+
   it('coalesces background status reads and latches a failed secure-storage probe', async () => {
     electronState.secureStorageAvailable = false;
     const service = new GmAccountService(providerBridge());
@@ -426,6 +885,94 @@ describe('GmAccountService lifecycle', () => {
       providerConfigured: true,
     });
     expect(provider.clearApiKeyIfMatches).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves native-store API-key signout behavior when the broker is disabled', async () => {
+    const key = 'gm_manual_secret';
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'api_key',
+      key,
+      keyPrefix: key.slice(0, 8),
+      providerConfigured: true,
+    });
+    const provider = providerBridge({
+      clearLegacyApiKeyIfMatches: vi.fn(async () => false),
+    });
+    const service = new GmAccountService(provider);
+
+    await expect(service.logout([targetA])).resolves.toEqual({});
+
+    expect(provider.clearApiKeyIfMatches).toHaveBeenCalledWith(
+      targetA,
+      createHash('sha256').update(key).digest('hex')
+    );
+    expect(provider.clearLegacyApiKeyIfMatches).not.toHaveBeenCalled();
+    await expect(service.getStatus()).resolves.toMatchObject({ connected: false });
+    await expect(
+      fs.access(path.join(userDataDirectory, 'saygm-legacy-key-cleanup.safe'))
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('defers old-keychain cleanup until the user explicitly requests it', async () => {
+    const key = 'gm_manual_secret';
+    const digest = createHash('sha256').update(key).digest('hex');
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'api_key',
+      key,
+      keyPrefix: key.slice(0, 8),
+      providerConfigured: true,
+      keyAuthorityState: 'active',
+    });
+    const provider = providerBridge({
+      clearLegacyApiKeyIfMatches: vi.fn(async () => true),
+    });
+    const service = new GmAccountService(provider, true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await service.logout([targetA]);
+    await expect(service.getStatus()).resolves.toMatchObject({
+      connected: false,
+      legacyKeyCleanupPending: true,
+    });
+    expect(provider.clearApiKeyIfMatches).not.toHaveBeenCalled();
+    expect(provider.clearLegacyApiKeyIfMatches).not.toHaveBeenCalled();
+
+    await expect(service.clearLegacyApiKey([targetA])).resolves.toEqual({ removed: true });
+    expect(provider.clearLegacyApiKeyIfMatches).toHaveBeenCalledWith(targetA, digest);
+    await expect(service.getStatus()).resolves.toMatchObject({ legacyKeyCleanupPending: false });
+  });
+
+  it('preserves a full legacy cleanup journal instead of writing an unreadable overflow', async () => {
+    const key = 'gm_manual_secret';
+    await writeEncryptedFixture('saygm-account.safe', {
+      version: 1,
+      mode: 'api_key',
+      key,
+      keyPrefix: key.slice(0, 8),
+      providerConfigured: true,
+      keyAuthorityState: 'active',
+    });
+    await writeEncryptedFixture('saygm-legacy-key-cleanup.safe', {
+      version: 1,
+      sha256s: Array.from({ length: 64 }, (_, index) => index.toString(16).padStart(64, '0')),
+    });
+    const service = new GmAccountService(providerBridge(), true);
+    await service.initializeManagedModelKeyAuthority();
+
+    await expect(service.logout([targetA])).rejects.toThrow('Remove saved legacy API-key cleanups');
+    await expect(service.getStatus()).resolves.toMatchObject({
+      connected: true,
+      legacyKeyCleanupPending: true,
+    });
+    const saved = JSON.parse(
+      Buffer.from(
+        await fs.readFile(path.join(userDataDirectory, 'saygm-legacy-key-cleanup.safe'), 'utf8'),
+        'base64'
+      ).toString()
+    ) as { sha256s: string[] };
+    expect(saved.sha256s).toHaveLength(64);
   });
 
   it.each([

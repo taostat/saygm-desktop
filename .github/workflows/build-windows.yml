@@ -264,7 +264,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Electron Forge Windows packaging failed ($LASTEXITCODE)." }
           $appDir = Resolve-Path "out/SayGM-win32-x64"
           if (-not (Test-Path (Join-Path $appDir "SayGM.exe"))) { throw "Packaged SayGM.exe was not produced." }
-          if (-not (Test-Path (Join-Path $appDir "resources/bin/goose.exe"))) { throw "Packaged Windows Goose backend was not produced." }
+          if (-not (Test-Path (Join-Path $appDir "resources/bin/saygm-agent.exe"))) { throw "Packaged Windows SayGM backend was not produced." }
           if (-not (Test-Path (Join-Path $appDir "resources/bin/uv.exe"))) { throw "Pinned Windows uv.exe was not packaged." }
           $asarVersion = node -e 'const asar = require("@electron/asar"); const pkg = JSON.parse(asar.extractFile(process.argv[1], "package.json").toString()); process.stdout.write(pkg.version)' "out/SayGM-win32-x64/resources/app.asar"
           if ($LASTEXITCODE -ne 0) { throw "Could not read packaged ASAR package.json ($LASTEXITCODE)." }
@@ -335,7 +335,7 @@ jobs:
           if ($process.ExitCode -ne 0) { throw "SayGM installer smoke install failed ($($process.ExitCode))." }
 
           $app = Join-Path $installDir "SayGM.exe"
-          $backend = Join-Path $installDir "resources/bin/goose.exe"
+          $backend = Join-Path $installDir "resources/bin/saygm-agent.exe"
           if (-not (Test-Path $app)) { throw "Installed SayGM.exe is missing." }
           if (-not (Test-Path $backend)) { throw "Installed native backend is missing." }
           foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
@@ -395,7 +395,7 @@ jobs:
 
           Expand-Archive -Path $portable -DestinationPath (Join-Path $smoke "Portable")
           if (-not (Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "SayGM.exe" | Select-Object -First 1)) { throw "Portable archive lacks SayGM.exe." }
-          $portableBackend = Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "goose.exe" | Select-Object -First 1
+          $portableBackend = Get-ChildItem (Join-Path $smoke "Portable") -Recurse -Filter "saygm-agent.exe" | Select-Object -First 1
           if (-not $portableBackend) { throw "Portable archive lacks the native backend." }
           foreach ($runtimeName in @("msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll")) {
             if (-not (Test-Path (Join-Path $portableBackend.DirectoryName $runtimeName))) {
@@ -417,14 +417,14 @@ jobs:
           $qa = Get-Content (Join-Path $out "qa-native-windows.json") -Raw | ConvertFrom-Json
           $sourceHashes = [ordered]@{
             app_sha256 = (Get-FileHash (Join-Path $appDir "SayGM.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
-            backend_sha256 = (Get-FileHash (Join-Path $appDir "resources/bin/goose.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend_sha256 = (Get-FileHash (Join-Path $appDir "resources/bin/saygm-agent.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
             asar_sha256 = (Get-FileHash (Join-Path $appDir "resources/app.asar") -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           $asarVersion = Get-Content (Join-Path $out "asar-package-version.txt") -Raw
           $installedHashes = Get-Content (Join-Path $out "installed-package-hashes.json") -Raw | ConvertFrom-Json -AsHashtable
           $portableHashes = [ordered]@{
             app_sha256 = (Get-FileHash $portableApp.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            backend_sha256 = (Get-FileHash (Join-Path $portableResources "bin/goose.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
+            backend_sha256 = (Get-FileHash (Join-Path $portableResources "bin/saygm-agent.exe") -Algorithm SHA256).Hash.ToLowerInvariant()
             asar_sha256 = (Get-FileHash (Join-Path $portableResources "app.asar") -Algorithm SHA256).Hash.ToLowerInvariant()
           }
           foreach ($field in $sourceHashes.Keys) {
