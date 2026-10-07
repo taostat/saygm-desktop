@@ -1,6 +1,9 @@
 name: Build SayGM Desktop for Windows beta.2
 
 on:
+  push:
+    branches:
+      - codex/cross-platform-beta2
   workflow_dispatch:
 
 permissions:
@@ -12,7 +15,7 @@ concurrency:
 
 jobs:
   desktop-windows-tests:
-    if: github.repository == 'taostat/saygm-desktop' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cross-platform-beta2'
+    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/cross-platform-beta2'
     name: Native Windows npx, typecheck, and desktop unit tests
     runs-on: windows-latest
     timeout-minutes: 45
@@ -23,8 +26,8 @@ jobs:
       - name: Verify trusted private beta ref
         shell: pwsh
         run: |
-          if ($env:GITHUB_REPOSITORY -ne "taostat/saygm-desktop" -or $env:GITHUB_REF -ne "refs/heads/codex/cross-platform-beta2" -or $env:GITHUB_EVENT_NAME -ne "workflow_dispatch") {
-            throw "This workflow only accepts manual dispatch from the trusted private beta2 branch."
+          if ($env:GITHUB_REPOSITORY -ne "taostat/saygm-desktop" -or $env:GITHUB_REF -ne "refs/heads/codex/cross-platform-beta2" -or $env:GITHUB_EVENT_NAME -notin @("push", "workflow_dispatch")) {
+            throw "This workflow only accepts a push or manual dispatch from the trusted private beta2 branch."
           }
 
       - name: Set up Node.js
@@ -57,7 +60,7 @@ jobs:
         run: pnpm run test:run
 
   build-windows-x64:
-    if: github.repository == 'taostat/saygm-desktop' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cross-platform-beta2'
+    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/cross-platform-beta2'
     name: Native Windows x64 beta.2 build, installer, and smoke checks
     runs-on: windows-latest
     needs: desktop-windows-tests

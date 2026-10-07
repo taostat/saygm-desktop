@@ -1,6 +1,9 @@
 name: Build SayGM Desktop Ubuntu beta.2
 
 on:
+  push:
+    branches:
+      - codex/cross-platform-beta2
   workflow_dispatch:
     inputs:
       architecture:
@@ -18,7 +21,7 @@ permissions:
 
 jobs:
   build:
-    if: github.repository == 'taostat/saygm-desktop' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/codex/cross-platform-beta2'
+    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/cross-platform-beta2'
     name: Ubuntu 22.04 ${{ matrix.architecture }} beta.2
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 150
@@ -28,7 +31,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        architecture: ${{ fromJSON(inputs.architecture == 'both' && '["x64","arm64"]' || format('["{0}"]', inputs.architecture)) }}
+        architecture: ${{ fromJSON(inputs.architecture == 'x64' && '["x64"]' || inputs.architecture == 'arm64' && '["arm64"]' || '["x64","arm64"]') }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -39,7 +42,10 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "taostat/saygm-desktop"
           test "$GITHUB_REF" = "refs/heads/codex/cross-platform-beta2"
-          test "$GITHUB_EVENT_NAME" = "workflow_dispatch"
+          case "$GITHUB_EVENT_NAME" in
+            push|workflow_dispatch) ;;
+            *) echo "::error::Unexpected event for the trusted beta workflow."; exit 1 ;;
+          esac
 
       - name: Install system build and smoke dependencies
         run: |
