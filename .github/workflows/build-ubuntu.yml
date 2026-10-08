@@ -69,15 +69,17 @@ jobs:
       - name: Install and inspect Debian package
         run: |
           sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb"
-          test "$(dpkg-query -W -f='${Architecture}' saygm)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
-          test -x /usr/bin/saygm
-          test -x /usr/lib/saygm/SayGM
-          test -x /usr/lib/saygm/resources/bin/goose
-          desktop_file="$(dpkg-query -L saygm | grep '/applications/.*\.desktop$' | head -n 1)"
+          test "$(dpkg-query -W -f='${Architecture}' saygm-desktop)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
+          test ! -e /usr/bin/saygm
+          test ! -L /usr/bin/saygm
+          test -x /usr/bin/saygm-desktop
+          test -x /usr/lib/saygm-desktop/SayGM
+          test -x /usr/lib/saygm-desktop/resources/bin/goose
+          desktop_file="$(dpkg-query -L saygm-desktop | grep '/applications/.*\.desktop$' | head -n 1)"
           test -n "$desktop_file"
-          grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
-          grep -Fx 'Icon=saygm' "$desktop_file"
-          ldd /usr/lib/saygm/resources/bin/goose | tee artifacts/goose-ldd.txt
+          grep -Fx 'Exec=/usr/bin/saygm-desktop %U' "$desktop_file"
+          grep -Fx 'Icon=saygm-desktop' "$desktop_file"
+          ldd /usr/lib/saygm-desktop/resources/bin/goose | tee artifacts/goose-ldd.txt
           ! grep -F 'not found' artifacts/goose-ldd.txt
 
       - name: Smoke test native app and protected storage
@@ -97,15 +99,15 @@ jobs:
               printf "%s" "$QA_KEYRING_PASSWORD" | gnome-keyring-daemon --start --components=secrets >/dev/null
             fi
             xvfb-run -a node scripts/qa-native-desktop.mjs \
-              --app /usr/lib/saygm/SayGM \
-              --backend /usr/lib/saygm/resources/bin/goose \
+              --app /usr/lib/saygm-desktop/SayGM \
+              --backend /usr/lib/saygm-desktop/resources/bin/goose \
               --expect-arch "${{ matrix.architecture }}" \
               --expect-storage available \
               --password-store gnome-libsecret \
               --report "$GITHUB_WORKSPACE/artifacts/qa-native-secret-service.json"
             xvfb-run -a node scripts/qa-native-desktop.mjs \
-              --app /usr/lib/saygm/SayGM \
-              --backend /usr/lib/saygm/resources/bin/goose \
+              --app /usr/lib/saygm-desktop/SayGM \
+              --backend /usr/lib/saygm-desktop/resources/bin/goose \
               --expect-arch "${{ matrix.architecture }}" \
               --expect-storage unavailable \
               --password-store basic \

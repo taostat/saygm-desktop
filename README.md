@@ -20,6 +20,7 @@ Latest release: `0.1.0-beta.2`.
 | Ubuntu ARM64 | Published. |
 
 Download available builds from the public [SayGM Desktop page](https://saygm.com/desktop).
+From the next release, the Linux package launches from the app menu or with `saygm-desktop` in a terminal. Installing it replaces the beta `saygm` package and keeps your settings.
 
 ## Development
 
