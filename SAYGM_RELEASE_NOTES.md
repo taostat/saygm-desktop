@@ -2,6 +2,7 @@
 
 ## Unreleased — upstream maintenance
 
+- On Linux, run the desktop with `saygm-desktop`. Installing the new `.deb` replaces the beta `saygm` package and keeps existing settings.
 - Restore the original Goose ancestry while preserving existing private commits and releases.
 - Add an isolated, pinned upstream-update workflow and document the downstream integration boundaries.
 - Reconcile the reviewed Windows and Ubuntu sources into one maintenance branch.

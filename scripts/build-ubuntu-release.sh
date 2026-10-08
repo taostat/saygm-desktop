@@ -16,12 +16,10 @@ case "$build_arch" in
   x64)
     expected_host_arch=x86_64
     expected_machine='Advanced Micro Devices X86-64'
-    debian_arch=amd64
     ;;
   arm64)
     expected_host_arch=aarch64
     expected_machine=AArch64
-    debian_arch=arm64
     ;;
   *)
     echo "Unsupported Ubuntu architecture: $build_arch" >&2
@@ -106,13 +104,13 @@ if [[ -z "$desktop_file" ]]; then
   echo "Debian package does not contain its desktop entry." >&2
   exit 1
 fi
-sed -i -e 's|^Exec=.*|Exec=/usr/bin/saygm %U|' -e 's|^Icon=.*|Icon=saygm|' "$desktop_file"
-grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
-grep -Fx 'Icon=saygm' "$desktop_file"
+sed -i -e 's|^Exec=.*|Exec=/usr/bin/saygm-desktop %U|' -e 's|^Icon=.*|Icon=saygm-desktop|' "$desktop_file"
+grep -Fx 'Exec=/usr/bin/saygm-desktop %U' "$desktop_file"
+grep -Fx 'Icon=saygm-desktop' "$desktop_file"
 
-package_goose="$package_root/usr/lib/saygm/resources/bin/goose"
+package_goose="$package_root/usr/lib/saygm-desktop/resources/bin/goose"
 if [[ ! -x "$package_goose" ]]; then
-  echo "Debian package layout changed: missing /usr/lib/saygm/resources/bin/goose." >&2
+  echo "Debian package layout changed: missing /usr/lib/saygm-desktop/resources/bin/goose." >&2
   find "$package_root/usr" -maxdepth 6 -type f -print >&2
   exit 1
 fi
@@ -177,6 +175,11 @@ if match:
     text = text[:match.start()] + replacement + text[match.end():]
 else:
     text = text.rstrip() + chr(10) + replacement
+# The installed electron-installer-debian version does not expose these control fields.
+for field in ("Replaces", "Conflicts"):
+    if re.search(rf"(?m)^{field}:", text):
+        raise SystemExit(f"Refusing to overwrite an existing {field} field")
+    text = text.rstrip() + f"\n{field}: saygm\n"
 control.write_text(text)
 PY
 

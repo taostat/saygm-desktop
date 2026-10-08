@@ -32,6 +32,10 @@ sudo apt install ./artifacts/SayGM-0.1.0-rc.5-linux-x64.deb
 sudo apt install ./artifacts/SayGM-0.1.0-rc.5-linux-arm64.deb
 ```
 
+The package installs the app at `/usr/lib/saygm-desktop/SayGM` and creates the
+`/usr/bin/saygm-desktop` launcher on `PATH`. Launch it from the app menu or run
+`saygm-desktop` in a terminal. The desktop entry remains SayGM.
+
 Linux credentials require an unlocked Secret Service provider such as GNOME
 Keyring. Start the provider and unlock its keyring before signing in. SayGM
 refuses OAuth setup when secure credential storage is unavailable; basic_text

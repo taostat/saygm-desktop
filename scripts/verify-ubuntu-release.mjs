@@ -29,9 +29,13 @@ const output = (command) => execFileSync(command[0], command.slice(1), { encodin
 const packageName = output(['dpkg-deb', '--field', args.deb, 'Package']);
 const version = output(['dpkg-deb', '--field', args.deb, 'Version']);
 const architecture = output(['dpkg-deb', '--field', args.deb, 'Architecture']);
-assert.equal(packageName, 'saygm');
+const providedPackages = output(['dpkg-deb', '--field', args.deb, 'Provides']).split(',').map((entry) => entry.trim().match(/^[a-z0-9][a-z0-9+.-]*/)?.[0]);
+assert.equal(packageName, 'saygm-desktop');
 assert.equal(version, '0.1.0~rc.5');
 assert.equal(architecture, expectedArchitecture.debian);
+assert.equal(output(['dpkg-deb', '--field', args.deb, 'Replaces']), 'saygm');
+assert.equal(output(['dpkg-deb', '--field', args.deb, 'Conflicts']), 'saygm');
+assert(!providedPackages.includes('saygm'), 'Debian package must not provide saygm');
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-deb-verify-'));
 try {
@@ -55,18 +59,21 @@ try {
   const debDesktop = debFiles.find((filename) => filename.endsWith('.desktop'));
   assert(debDesktop, 'Debian package must include a desktop entry');
   const desktopText = await fs.readFile(debDesktop, 'utf8');
-  assert.match(desktopText, /^Exec=\/usr\/bin\/saygm %U$/m);
-  assert.match(desktopText, /^Icon=saygm$/m);
-  assert(debFiles.some((filename) => /\/saygm\.(png|svg|xpm)$/i.test(filename)), 'Debian package must include the SayGM application icon');
+  assert.match(desktopText, /^Name=SayGM$/m);
+  assert.match(desktopText, /^Exec=\/usr\/bin\/saygm-desktop %U$/m);
+  assert.match(desktopText, /^Icon=saygm-desktop$/m);
+  assert.match(desktopText, /^MimeType=x-scheme-handler\/saygm;$/m);
+  assert((await fs.stat(path.join(packageRoot, 'usr/share/pixmaps/saygm-desktop.png'))).isFile(), 'Debian package must include the icon named by its desktop entry');
 
-  const launcher = path.join(packageRoot, 'usr/bin/saygm');
+  assert(!debFiles.includes(path.join(packageRoot, 'usr/bin/saygm')), 'Debian package must not install /usr/bin/saygm');
+  const launcher = path.join(packageRoot, 'usr/bin/saygm-desktop');
   const launcherLink = await fs.readlink(launcher);
   const resolvedLauncher = launcherLink.startsWith('/')
     ? path.join(packageRoot, launcherLink.slice(1))
     : path.resolve(path.dirname(launcher), launcherLink);
-  assert.equal(resolvedLauncher, path.join(packageRoot, 'usr/lib/saygm/SayGM'));
-  const debApp = path.join(packageRoot, 'usr/lib/saygm/SayGM');
-  const debBackend = path.join(packageRoot, 'usr/lib/saygm/resources/bin/goose');
+  const debApp = path.join(packageRoot, 'usr/lib/saygm-desktop/SayGM');
+  assert.equal(resolvedLauncher, debApp);
+  const debBackend = path.join(packageRoot, 'usr/lib/saygm-desktop/resources/bin/goose');
   assert((await fs.stat(debApp)).isFile());
   assert((await fs.stat(debBackend)).isFile());
 
@@ -132,8 +139,8 @@ try {
     zip_sha256: await sha256(args.zip),
     goose_sha256: expectedBackendHash,
     package_desktop_entry: path.relative(packageRoot, debDesktop),
-    package_exec: '/usr/bin/saygm',
-    package_icon: 'saygm',
+    package_exec: '/usr/bin/saygm-desktop',
+    package_icon: 'saygm-desktop',
     backend_ldd: ldd.split(String.fromCharCode(10)).map((line) => line.trim()).filter(Boolean),
     asar_path_count: { deb: asarPaths.deb.length, zip: asarPaths.zip.length },
     sensitive_path_scan: 'passed',
