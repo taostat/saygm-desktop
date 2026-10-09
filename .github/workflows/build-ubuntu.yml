@@ -117,7 +117,7 @@ jobs:
           cd artifacts
           sha256sum "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb" "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: saygm-desktop-0.1.0-rc.5-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
