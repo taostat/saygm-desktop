@@ -33,8 +33,8 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != "$expected_host_arch" ]]; then
   echo "This release build must run on native Ubuntu $expected_host_arch." >&2
   exit 2
 fi
-if [[ "$release_version" != 0.1.0-rc.5 ]]; then
-  echo "Expected desktop version 0.1.0-rc.5, found $release_version." >&2
+if [[ "$release_version" != 0.1.0-rc.6 ]]; then
+  echo "Expected desktop version 0.1.0-rc.6, found $release_version." >&2
   exit 2
 fi
 if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
@@ -91,7 +91,7 @@ fi
 final_deb="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.deb"
 final_zip="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.zip"
 if [[ -e "$final_deb" || -e "$final_zip" ]]; then
-  echo "Refusing to overwrite existing Ubuntu RC5 artifacts in $artifact_dir." >&2
+  echo "Refusing to overwrite existing Ubuntu RC6 artifacts in $artifact_dir." >&2
   exit 2
 fi
 cp "$deb_source" "$final_deb"
@@ -200,7 +200,7 @@ The portable ZIP contains the app and can be extracted and launched without inst
 Linux credentials require an unlocked Secret Service provider such as GNOME Keyring.
 SayGM refuses OAuth setup when secure storage is unavailable; basic_text storage is not accepted.
 
-This is a private RC5 build using production SayGM API and gateway endpoints.
+This is a private RC6 build using production SayGM API and gateway endpoints.
 No account login or inference was performed by the package build.
 EOF
 
@@ -212,4 +212,4 @@ Backend SHA-256: ${source_hash}
 Build commit: $(git -C "$repo_root" rev-parse HEAD)
 EOF
 
-echo "Ubuntu RC5 artifacts created in $artifact_dir"
+echo "Ubuntu RC6 artifacts created in $artifact_dir"

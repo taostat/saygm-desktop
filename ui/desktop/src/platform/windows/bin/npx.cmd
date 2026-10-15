@@ -3,12 +3,30 @@ SETLOCAL EnableDelayedExpansion
 
 SET "SAYGM_NODE_DIR=%LOCALAPPDATA%\SayGM\node"
 SET "NODE_VERSION=22.14.0"
+SET "MIN_SYSTEM_NODE_MAJOR=22"
 
 REM === Check for previously downloaded portable Node.js (matching version) ===
 if exist "%SAYGM_NODE_DIR%\node-v%NODE_VERSION%.installed" (
     SET "PATH=%SAYGM_NODE_DIR%;!PATH!"
     "%SAYGM_NODE_DIR%\npx.cmd" %*
     exit /b !errorlevel!
+)
+
+REM === Use a system Node.js from PATH ===
+REM Look for node.exe, not npx.cmd: a bare npx.cmd lookup can find this wrapper.
+REM A broken npm install fails "npx --version", so the next candidate or the download is used.
+for /f "delims=" %%N in ('where $PATH:node.exe 2^>nul') do (
+    if exist "%%~dpNnpx.cmd" (
+        "%%N" -e "process.exit(parseInt(process.versions.node) >= %MIN_SYSTEM_NODE_MAJOR% ? 0 : 1)" <nul >nul 2>&1
+        if "!errorlevel!"=="0" (
+            call "%%~dpNnpx.cmd" --version <nul >nul 2>&1
+            if "!errorlevel!"=="0" (
+                SET "PATH=%%~dpN;!PATH!"
+                "%%~dpNnpx.cmd" %*
+                exit /b !errorlevel!
+            )
+        )
+    )
 )
 
 REM === Download portable Node.js ===

@@ -30,7 +30,7 @@ const packageName = output(['dpkg-deb', '--field', args.deb, 'Package']);
 const version = output(['dpkg-deb', '--field', args.deb, 'Version']);
 const architecture = output(['dpkg-deb', '--field', args.deb, 'Architecture']);
 assert.equal(packageName, 'saygm');
-assert.equal(version, '0.1.0~rc.5');
+assert.equal(version, '0.1.0~rc.6');
 assert.equal(architecture, expectedArchitecture.debian);
 
 const temporary = await fs.mkdtemp(path.join(os.tmpdir(), 'saygm-deb-verify-'));
@@ -125,7 +125,7 @@ try {
     result: 'passed',
     package: packageName,
     debian_version: version,
-    desktop_version: '0.1.0-rc.5',
+    desktop_version: '0.1.0-rc.6',
     build_arch: args.arch,
     architecture,
     deb_sha256: await sha256(args.deb),

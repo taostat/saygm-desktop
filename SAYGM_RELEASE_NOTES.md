@@ -1,14 +1,13 @@
 # SayGM Desktop release candidates
 
-## Unreleased — upstream maintenance
+## 0.1.0-rc.6 (internal candidate)
 
-- Restore the original Goose ancestry while preserving existing private commits and releases.
-- Add an isolated, pinned upstream-update workflow and document the downstream integration boundaries.
-- Reconcile the reviewed Windows and Ubuntu sources into one maintenance branch.
-- Centralise desktop product configuration and separate SayGM styles from the shared stylesheet.
-- Centralise backend prompt identity and desktop storage policy while retaining existing behaviour.
+- Integrate Goose upstream `main` at `0df818175bc854229746c81f01ea154b1c6c5e9e` while preserving SayGM identity, account policy, pinned backend TLS, and SayGM update behavior.
+- Add an About page with a positive Goose attribution, a thank-you to the Goose team and community, and links to Goose and SayGM.com. The native About menu opens this page, including before onboarding.
+- Point in-app ticket raising to the public SayGM Desktop issue forms.
+- Update the Windows installer identity and RC6 platform build and verification metadata.
 
-These are source changes. Existing RC5 downloads are unchanged; adopting a newer Goose revision and publishing new platform packages remain separate steps.
+Desktop lint, typecheck, localization checks and 1,089 UI tests passed (8 skipped). Rust formatting and Clippy passed. The Goose Rust suite has one failing ACP effort-update test; the same test fails on a clean checkout of upstream `0df8181`. RC6 packages have not been built or published, and the public RC5 artifacts remain unchanged.
 
 ## 0.1.0-rc.5 (internal Apple Silicon preview)
 
@@ -36,7 +35,7 @@ Focused protocol, display and type checks passed. This preview is being opened b
 - Replace manual balance refresh with automatic updates on entry and focus, with request coalescing and failure backoff.
 - Preserve the menu-bar logo's proportions and add transparent vertical margins.
 
-This preview is being opened at the user's request before final QA. Native startup, sign-in completion, and storage-prompt behavior require on-device verification; source and artifact checks alone do not establish those results. It remains ad hoc signed and unnotarized.
+This preview is being opened at the user's request before the final QA pass. Native startup, sign-in completion, and storage-prompt behavior require on-device verification; source and artifact checks alone do not establish those results. It remains ad hoc signed and unnotarized.
 
 ## 0.1.0-rc.2
 

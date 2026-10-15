@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose est le framework open source d’agents IA derrière SayGM. Merci à l’équipe Goose et à sa communauté d’avoir créé cette base."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "À propos de SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Découvrir Goose"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "Visiter SayGM.com"
+  },
+  "about.title": {
+    "defaultMessage": "Fondé sur Goose"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Version {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "Adaptateur ACP trouvé"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Obsolète — utilisez plutôt {replacement}."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "Erreur ProviderCard : aucune métadonnée fournie"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Fournisseur inconnu"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "Format d'API"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "Annuler"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Choisir un fournisseur"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Description de la session mise à jour avec succès"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "Utilise la boucle d’agent basée sur les opérations. Désactivez-la pour utiliser la boucle héritée."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Automatique"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Seuil %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Limite de tokens"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Résume les anciennes requêtes et réponses d’outils pour économiser le contexte. Le seuil est automatique si le champ est vide."

@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose, SayGM’in arkasındaki açık kaynaklı yapay zekâ ajanı çerçevesidir. Bu temeli oluşturdukları için Goose ekibine ve topluluğuna teşekkür ederiz."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "SayGM Hakkında"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Goose’u keşfet"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "SayGM.com’u ziyaret et"
+  },
+  "about.title": {
+    "defaultMessage": "Goose üzerine kuruldu"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Sürüm {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "ACP bağdaştırıcısı bulundu"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Kullanımdan kaldırıldı — bunun yerine {replacement} kullanın."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "ProviderCard hatası: Meta veri sağlanmadı"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Bilinmeyen Sağlayıcı"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "API Biçimi"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "İptal"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Sağlayıcıyı Seçin"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Oturum açıklaması başarıyla güncellendi"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "İşlem tabanlı ajan döngüsünü kullanır. Eski döngüyü kullanmak için kapatın."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Otomatik"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Eşik %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Jeton sınırı"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Bağlamdan tasarruf etmek için eski araç isteklerini ve yanıtlarını özetler. Boş bırakıldığında kesme noktası otomatik belirlenir."

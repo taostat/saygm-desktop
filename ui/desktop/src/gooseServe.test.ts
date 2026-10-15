@@ -8,6 +8,7 @@ import {
   startGooseServe,
   waitForGooseServeReady,
 } from './gooseServe';
+import { getLoginShellPath } from './loginShellPath';
 
 const binaryName = process.platform === 'win32' ? 'goose.exe' : 'goose';
 const tempDirs: string[] = [];
@@ -134,6 +135,61 @@ describe('startGooseServe', () => {
     }
   });
 
+  it.skipIf(process.platform === 'win32')(
+    'gives goose the login PATH, then the inherited PATH, then the bundle',
+    async () => {
+      const tempDir = makeTempDir();
+      const loginDir = path.join(tempDir, 'login');
+      const inheritedDir = path.join(tempDir, 'inherited');
+      const bundleDir = path.join(tempDir, 'bundle');
+      const recordPath = path.join(tempDir, 'record.txt');
+      makeExecutable(path.join(loginDir, 'dup'), '#!/bin/sh\n');
+      makeExecutable(path.join(bundleDir, 'dup'), '#!/bin/sh\n');
+      makeExecutable(path.join(bundleDir, 'bundled-only'), '#!/bin/sh\n');
+      const loginShell = makeExecutable(
+        path.join(tempDir, 'login-shell'),
+        [
+          '#!/bin/sh',
+          '[ "$*" = "-l -i -c printenv PATH" ] || exit 1',
+          'echo "Welcome back!"',
+          `echo "${loginDir}:/usr/bin"`,
+          '',
+        ].join('\n')
+      );
+      const goosePath = makeExecutable(
+        path.join(bundleDir, 'goose'),
+        [
+          '#!/bin/sh',
+          '{ printf "%s\\n" "$PATH"; command -v dup; command -v bundled-only; } > "$TEST_RECORD_PATH.tmp"',
+          'mv "$TEST_RECORD_PATH.tmp" "$TEST_RECORD_PATH"',
+          'while true; do sleep 1; done',
+          '',
+        ].join('\n')
+      );
+      vi.stubEnv('GOOSE_BINARY', goosePath);
+      vi.stubEnv('SHELL', loginShell);
+      vi.stubEnv('PATH', `${inheritedDir}:/usr/bin:/bin`);
+
+      const result = await startGooseServe({
+        serverSecret: 'test-secret',
+        dir: tempDir,
+        env: { TEST_RECORD_PATH: recordPath },
+        loginShellPath: await getLoginShellPath(),
+        readinessProbe: async () => ({ ok: true, statusCode: 200 }),
+      });
+
+      try {
+        expect(await waitForFileLines(recordPath)).toEqual([
+          `${loginDir}:/usr/bin:${inheritedDir}:/usr/bin:/bin:${bundleDir}`,
+          path.join(loginDir, 'dup'),
+          path.join(bundleDir, 'bundled-only'),
+        ]);
+      } finally {
+        await result.cleanup();
+      }
+    }
+  );
+
   it.skipIf(process.platform === 'win32')('uses the injected readiness probe', async () => {
     const tempDir = makeTempDir();
     const goosePath = makeExecutable(
@@ -187,11 +243,13 @@ describe('startGooseServe', () => {
       }),
       error: vi.fn(),
     };
-    const readinessProbe = vi.fn(async (_url: string, _signal: AbortSignal, fingerprint: string | null) => {
-      await fingerprintSeen;
-      expect(fingerprint).toBe('AA:BB:CC');
-      return { ok: true, statusCode: 200 };
-    });
+    const readinessProbe = vi.fn(
+      async (_url: string, _signal: AbortSignal, fingerprint: string | null) => {
+        await fingerprintSeen;
+        expect(fingerprint).toBe('AA:BB:CC');
+        return { ok: true, statusCode: 200 };
+      }
+    );
 
     const result = await startGooseServe({
       serverSecret: 'test-secret',
@@ -208,84 +266,90 @@ describe('startGooseServe', () => {
     }
   });
 
-  it.skipIf(process.platform === 'win32')('uses TLS URLs and args when TLS is enabled', async () => {
-    const tempDir = makeTempDir();
-    const argsPath = path.join(tempDir, 'args.txt');
-    const goosePath = makeExecutable(
-      path.join(tempDir, 'goose'),
-      [
-        '#!/usr/bin/env sh',
-        'printf "%s\\n" "$@" > "$TEST_ARGS_PATH"',
-        'printf "GOOSED_CERT_FINGERPRINT=DD:EE:FF\\n"',
-        'while true; do sleep 1; done',
-        '',
-      ].join('\n')
-    );
-    vi.stubEnv('GOOSE_BINARY', goosePath);
+  it.skipIf(process.platform === 'win32')(
+    'uses TLS URLs and args when TLS is enabled',
+    async () => {
+      const tempDir = makeTempDir();
+      const argsPath = path.join(tempDir, 'args.txt');
+      const goosePath = makeExecutable(
+        path.join(tempDir, 'goose'),
+        [
+          '#!/usr/bin/env sh',
+          'printf "%s\\n" "$@" > "$TEST_ARGS_PATH"',
+          'printf "GOOSED_CERT_FINGERPRINT=DD:EE:FF\\n"',
+          'while true; do sleep 1; done',
+          '',
+        ].join('\n')
+      );
+      vi.stubEnv('GOOSE_BINARY', goosePath);
 
-    const readinessUrls: string[] = [];
-    const logger = {
-      info: vi.fn(),
-      error: vi.fn(),
-    };
-    const readinessProbe = vi.fn(async (input: string) => {
-      readinessUrls.push(input);
-      return { ok: true, statusCode: 200 };
-    });
+      const readinessUrls: string[] = [];
+      const logger = {
+        info: vi.fn(),
+        error: vi.fn(),
+      };
+      const readinessProbe = vi.fn(async (input: string) => {
+        readinessUrls.push(input);
+        return { ok: true, statusCode: 200 };
+      });
 
-    const result = await startGooseServe({
-      serverSecret: 'test-secret',
-      dir: tempDir,
-      tls: true,
-      env: {
-        TEST_ARGS_PATH: argsPath,
-      },
-      logger,
-      readinessProbe,
-    });
+      const result = await startGooseServe({
+        serverSecret: 'test-secret',
+        dir: tempDir,
+        tls: true,
+        env: {
+          TEST_ARGS_PATH: argsPath,
+        },
+        logger,
+        readinessProbe,
+      });
 
-    try {
-      expect(readinessUrls[0]).toMatch(/^https:\/\/127\.0\.0\.1:\d+\/status$/);
-      expect(result.acpUrl).toMatch(/^wss:\/\/127\.0\.0\.1:\d+\/acp\?token=test-secret$/);
-      expect(result.certFingerprint).toBe('DD:EE:FF');
-      const args = await waitForFileLines(argsPath);
-      expect(args).toContain('--tls');
-      expect(args).toContain('--enable-scheduler');
-    } finally {
-      await result.cleanup();
+      try {
+        expect(readinessUrls[0]).toMatch(/^https:\/\/127\.0\.0\.1:\d+\/status$/);
+        expect(result.acpUrl).toMatch(/^wss:\/\/127\.0\.0\.1:\d+\/acp\?token=test-secret$/);
+        expect(result.certFingerprint).toBe('DD:EE:FF');
+        const args = await waitForFileLines(argsPath);
+        expect(args).toContain('--tls');
+        expect(args).toContain('--enable-scheduler');
+      } finally {
+        await result.cleanup();
+      }
     }
-  });
+  );
 
-  it.skipIf(process.platform === 'win32')('waits for TLS fingerprint before readiness succeeds', async () => {
-    const tempDir = makeTempDir();
-    const goosePath = makeExecutable(
-      path.join(tempDir, 'goose'),
-      [
-        '#!/usr/bin/env sh',
-        'sleep 0.1',
-        'printf "GOOSED_CERT_FINGERPRINT=11:22:33\\n"',
-        'while true; do sleep 1; done',
-        '',
-      ].join('\n')
-    );
-    vi.stubEnv('GOOSE_BINARY', goosePath);
+  it.skipIf(process.platform === 'win32')(
+    'waits for TLS fingerprint before readiness succeeds',
+    async () => {
+      const tempDir = makeTempDir();
+      const goosePath = makeExecutable(
+        path.join(tempDir, 'goose'),
+        [
+          '#!/usr/bin/env sh',
+          'sleep 0.1',
+          'printf "GOOSED_CERT_FINGERPRINT=11:22:33\\n"',
+          'while true; do sleep 1; done',
+          '',
+        ].join('\n')
+      );
+      vi.stubEnv('GOOSE_BINARY', goosePath);
 
-    const readinessProbe = vi.fn(async () => ({ ok: true, statusCode: 200 }));
+      const readinessProbe = vi.fn(async () => ({ ok: true, statusCode: 200 }));
 
-    const result = await startGooseServe({
-      serverSecret: 'test-secret',
-      dir: tempDir,
-      tls: true,
-      readinessProbe,
-    });
+      const result = await startGooseServe({
+        serverSecret: 'test-secret',
+        dir: tempDir,
+        tls: true,
+        readinessProbe,
+      });
 
-    try {
-      expect(readinessProbe).toHaveBeenCalled();
-      expect(result.certFingerprint).toBe('11:22:33');
-    } finally {
-      await result.cleanup();
+      try {
+        expect(readinessProbe).toHaveBeenCalled();
+        expect(result.certFingerprint).toBe('11:22:33');
+      } finally {
+        await result.cleanup();
+      }
     }
-  });
+  );
 });
 
 describe('waitForGooseServeReady', () => {
@@ -298,20 +362,15 @@ describe('waitForGooseServeReady', () => {
     });
 
     await expect(
-      waitForGooseServeReady(
-        'https://127.0.0.1:1234/status',
-        [],
-        () => childUnavailable,
-        {
-          healthUrl: 'https://127.0.0.1:1234/health',
-          readinessProbe,
-          expectedFingerprint: 'AA:BB:CC',
-          timeoutMs: 20,
-          intervalMs: 1,
-          attemptTimeoutMs: 5,
-          onEvent: (name, details) => events.push({ name, details }),
-        }
-      )
+      waitForGooseServeReady('https://127.0.0.1:1234/status', [], () => childUnavailable, {
+        healthUrl: 'https://127.0.0.1:1234/health',
+        readinessProbe,
+        expectedFingerprint: 'AA:BB:CC',
+        timeoutMs: 20,
+        intervalMs: 1,
+        attemptTimeoutMs: 5,
+        onEvent: (name, details) => events.push({ name, details }),
+      })
     ).resolves.toBe(false);
 
     expect(events.map((event) => event.name)).toContain('healthcheck_fatal_error');
@@ -323,20 +382,15 @@ describe('waitForGooseServeReady', () => {
     const readinessProbe = vi.fn(async () => ({ ok: false, errorCode: 'ECONNREFUSED' }));
 
     await expect(
-      waitForGooseServeReady(
-        'https://127.0.0.1:1234/status',
-        [],
-        () => false,
-        {
-          healthUrl: 'https://127.0.0.1:1234/health',
-          readinessProbe,
-          expectedFingerprint: 'AA:BB:CC',
-          timeoutMs: 20,
-          intervalMs: 1,
-          attemptTimeoutMs: 5,
-          onEvent: (name, details) => events.push({ name, details }),
-        }
-      )
+      waitForGooseServeReady('https://127.0.0.1:1234/status', [], () => false, {
+        healthUrl: 'https://127.0.0.1:1234/health',
+        readinessProbe,
+        expectedFingerprint: 'AA:BB:CC',
+        timeoutMs: 20,
+        intervalMs: 1,
+        attemptTimeoutMs: 5,
+        onEvent: (name, details) => events.push({ name, details }),
+      })
     ).resolves.toBe(false);
 
     const timeout = events.find((event) => event.name === 'healthcheck_timeout');
@@ -353,29 +407,22 @@ describe('waitForGooseServeReady', () => {
     const readinessProbe = vi.fn(
       (_url: string, signal: AbortSignal) =>
         new Promise<{ ok: false; errorCode: string }>((resolve) => {
-          signal.addEventListener(
-            'abort',
-            () => resolve({ ok: false, errorCode: 'ABORT_ERR' }),
-            { once: true }
-          );
+          signal.addEventListener('abort', () => resolve({ ok: false, errorCode: 'ABORT_ERR' }), {
+            once: true,
+          });
         })
     );
 
     await expect(
-      waitForGooseServeReady(
-        'https://127.0.0.1:1234/status',
-        [],
-        () => false,
-        {
-          healthUrl: 'https://127.0.0.1:1234/health',
-          readinessProbe,
-          expectedFingerprint: 'AA:BB:CC',
-          timeoutMs: 20,
-          intervalMs: 1,
-          attemptTimeoutMs: 5,
-          onEvent: (name, details) => events.push({ name, details }),
-        }
-      )
+      waitForGooseServeReady('https://127.0.0.1:1234/status', [], () => false, {
+        healthUrl: 'https://127.0.0.1:1234/health',
+        readinessProbe,
+        expectedFingerprint: 'AA:BB:CC',
+        timeoutMs: 20,
+        intervalMs: 1,
+        attemptTimeoutMs: 5,
+        onEvent: (name, details) => events.push({ name, details }),
+      })
     ).resolves.toBe(false);
 
     expect(events.find((event) => event.name === 'healthcheck_timeout')?.details).toMatchObject({

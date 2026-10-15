@@ -210,7 +210,7 @@ interface ChatInputProps {
   recipeId?: string | null;
   initialPrompt?: string;
   append?: (message: Message) => void;
-  onWorkingDirChange?: (newDir: string) => Promise<void> | void;
+  onWorkingDirChange: (newDir: string) => Promise<void> | void;
   inputRef?: React.RefObject<HTMLTextAreaElement | null>;
   sessionModel?: string | null;
   sessionProvider?: string | null;
@@ -1750,7 +1750,7 @@ export default function ChatInput({
             sessionId={sessionId ?? undefined}
             workingDir={currentWorkingDir}
             onWorkingDirChange={async (newDir) => {
-              await onWorkingDirChange?.(newDir);
+              await onWorkingDirChange(newDir);
               setWorkingDirOverride(newDir);
             }}
           />

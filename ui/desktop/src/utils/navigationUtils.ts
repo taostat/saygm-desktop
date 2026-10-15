@@ -5,6 +5,7 @@ import { UserInput } from '../types/message';
 export type View =
   | 'chat'
   | 'pair'
+  | 'about'
   | 'settings'
   | 'extensions'
   | 'moreModels'
@@ -54,6 +55,9 @@ export const createNavigationHandler = (navigate: NavigateFunction) => {
       }
       case 'settings':
         navigate('/settings', { state: options });
+        break;
+      case 'about':
+        navigate('/about', { state: options });
         break;
       case 'sessions':
         navigate('/sessions', { state: options });

@@ -73,13 +73,11 @@ function ProviderCards({
   isOnboarding,
   refreshProviders,
   setView,
-  onModelSelected,
 }: {
   providers: ProviderDetails[];
   isOnboarding: boolean;
-  refreshProviders?: () => void;
-  setView?: (view: View) => void;
-  onModelSelected?: (model?: string) => void;
+  refreshProviders: () => void;
+  setView: (view: View) => void;
 }) {
   const intl = useIntl();
   const [searchQuery, setSearchQuery] = useState('');
@@ -144,9 +142,7 @@ function ProviderCards({
       const providerId = editingProvider.id;
       setShowCustomProviderModal(false);
       setEditingProvider(null);
-      if (refreshProviders) {
-        refreshProviders();
-      }
+      refreshProviders();
       setSwitchModelProvider(providerId);
       setShowSwitchModelModal(true);
     },
@@ -160,9 +156,7 @@ function ProviderCards({
     setShowCustomProviderModal(false);
     setEditingProvider(null);
     setIsActiveProvider(false);
-    if (refreshProviders) {
-      refreshProviders();
-    }
+    refreshProviders();
   }, [editingProvider, refreshProviders]);
 
   const handleCloseModal = useCallback(() => {
@@ -173,17 +167,13 @@ function ProviderCards({
 
   const onCloseProviderConfig = useCallback(() => {
     setConfiguringProvider(null);
-    if (refreshProviders) {
-      refreshProviders();
-    }
+    refreshProviders();
   }, [refreshProviders]);
 
   const onProviderConfigured = useCallback(
     async (provider: ProviderDetails) => {
       setConfiguringProvider(null);
-      if (refreshProviders) {
-        await refreshProviders();
-      }
+      await refreshProviders();
       setSwitchModelProvider(provider.name);
       setShowSwitchModelModal(true);
     },
@@ -197,9 +187,7 @@ function ProviderCards({
   const handleSetView = useCallback(
     (view: View) => {
       setShowSwitchModelModal(false);
-      if (setView) {
-        setView(view);
-      }
+      setView(view);
     },
     [setView]
   );
@@ -209,9 +197,7 @@ function ProviderCards({
       const result = await acpCreateCustomProviderFromRequest(data);
       const providerId = result.provider_name;
       setShowCustomProviderModal(false);
-      if (refreshProviders) {
-        await refreshProviders();
-      }
+      await refreshProviders();
       setSwitchModelProvider(providerId);
       setShowSwitchModelModal(true);
     },
@@ -269,7 +255,7 @@ function ProviderCards({
     api_key: '',
     models: editingProvider.config.models ?? [],
     supports_streaming: editingProvider.config.supportsStreaming ?? true,
-    requires_auth: editingProvider.config.requiresAuth ?? true,
+    requires_auth: editingProvider.config.requiresAuth,
     headers: editingProvider.config.headers ?? undefined,
     catalog_provider_id: editingProvider.config.catalogProviderId ?? undefined,
     toolshim: editingProvider.config.toolshim,
@@ -331,7 +317,6 @@ function ProviderCards({
           sessionId={null}
           onClose={onCloseSwitchModelModal}
           setView={handleSetView}
-          onModelSelected={onModelSelected}
           initialProvider={switchModelProvider}
           titleOverride={intl.formatMessage(i18n.chooseModel)}
         />
@@ -345,13 +330,11 @@ export default function ProviderGrid({
   isOnboarding,
   refreshProviders,
   setView,
-  onModelSelected,
 }: {
   providers: ProviderDetails[];
   isOnboarding: boolean;
-  refreshProviders?: () => void;
-  setView?: (view: View) => void;
-  onModelSelected?: (model?: string) => void;
+  refreshProviders: () => void;
+  setView: (view: View) => void;
 }) {
   return (
     <ProviderCards
@@ -359,7 +342,6 @@ export default function ProviderGrid({
       isOnboarding={isOnboarding}
       refreshProviders={refreshProviders}
       setView={setView}
-      onModelSelected={onModelSelected}
     />
   );
 }

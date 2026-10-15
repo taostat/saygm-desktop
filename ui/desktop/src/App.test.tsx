@@ -168,6 +168,7 @@ vi.mock('react-router', () => ({
 
 // Mock electron API
 const mockElectron = {
+  getVersion: vi.fn().mockReturnValue('0.1.0-rc.6'),
   getConfig: vi.fn().mockReturnValue({
     GOOSE_ALLOWLIST_WARNING: false,
     GOOSE_WORKING_DIR: '/test/dir',

@@ -1,5 +1,29 @@
 # Maintenance validation — 2026-10-05
 
+## RC6 candidate validation — 2026-10-15
+
+Candidate integrates Goose `0df818175bc854229746c81f01ea154b1c6c5e9e` with
+SayGM RC5 source and the About and ticket-link updates.
+
+- `pnpm run lint:check` passed on macOS arm64 with pinned Node 24.10.0 and pnpm
+  10.30.3; this includes TypeScript typecheck, ESLint, and locale validation
+  (1,612 messages across 15 locales).
+- `pnpm run test:run` passed: 122 files, 1,089 tests; 1 file and 8 tests skipped.
+- `pnpm exec prettier --check src/main.ts` passed. The repository-wide UI
+  `format:check` still reports 59 files, mostly inherited Goose changes; the
+  SayGM-touched UI files were formatted separately.
+- `cargo fmt --all -- --check` passed.
+- `cargo clippy -p goose --all-targets --features
+  portable-default,system-keyring,code-mode,local-inference,online-model-meta --
+  -D warnings` passed.
+- The matching-feature Goose suite ran 2,495 tests: 2,494 passed and
+  `acp::server::tests::asynchronous_provider_effort_update_is_forwarded_to_client`
+  timed out. A clean worktree at the exact Goose revision reproduced the same
+  failure. No SayGM patch was made for this upstream test failure.
+- Native RC6 packages and Linux/Windows platform checks have not run. No RC6
+  artifact or release has been published. The private release destination is
+  still unconfirmed.
+
 Runtime source reviewed at `aaa6a16f71c3914e9345d9bc8f123b2f081be63d`.
 Later documentation changes do not alter that source. Implementation used Luna
 developers with independent Astra review.

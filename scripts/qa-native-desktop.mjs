@@ -22,7 +22,7 @@ assert(['available', 'unavailable'].includes(options['expect-storage']));
 assert(['linux', 'win32'].includes(process.platform), 'This test must run on the native target OS');
 const expectedArchitecture = options['expect-arch'] ?? 'x64';
 assert(['x64', 'arm64'].includes(expectedArchitecture), 'Expected architecture must be x64 or arm64');
-assert(process.platform === 'linux' || expectedArchitecture === 'x64', 'Windows RC5 supports x64 only');
+assert(process.platform === 'linux' || expectedArchitecture === 'x64', 'Windows RC6 supports x64 only');
 assert.equal(process.arch, expectedArchitecture, 'QA must run natively on the requested artifact architecture');
 const appPath = await fs.realpath(path.resolve(options.app));
 const backendPath = await fs.realpath(path.resolve(options.backend));
@@ -156,7 +156,7 @@ async function start() {
   }));
   assert.equal(details.platform, process.platform);
   assert.equal(details.arch, expectedArchitecture);
-  assert.equal(details.version, '0.1.0-rc.5');
+  assert.equal(details.version, '0.1.0-rc.6');
   const runtimeRoot = path.resolve(details.config.GOOSE_PATH_ROOT);
   const temporaryRoot = path.join(temporaryUserData, 'agent');
   const nativeRoot = nativeWindowsUserData ? path.join(nativeWindowsUserData, 'agent') : null;

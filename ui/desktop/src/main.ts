@@ -56,7 +56,6 @@ import './utils/gitBranchIpc';
 import './utils/recipeHash';
 import type { GooseApp } from './types/apps';
 import installExtension, { REACT_DEVELOPER_TOOLS } from 'electron-devtools-installer';
-import { WEB_PROTOCOLS } from './utils/urlSecurity';
 import { openExternalUrl } from './utils/openExternalUrl';
 import { registerGmAccountIpcHandlers } from './utils/gmAccountIpc';
 import { SAYGM_PRODUCT } from './product/saygmProduct';
@@ -308,9 +307,15 @@ function listGitWorktreeDirs(dir: string): Promise<string[]> {
 
 if (started) app.quit();
 
-// Certificate trust for active backend leases. Renderer requests pin to the
-// exact certificate fingerprint. Each backend lease owns a trust record so old
-// windows keep working after settings change.
+// The installer's shortcuts carry this AppUserModelID (electron-builder appId). The running app
+// must use the same one so Windows groups it with them on the taskbar and shows its notifications.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.saygm.desktop');
+}
+
+// Certificate trust for active backend leases. Renderer requests and
+// main-process net.fetch both pin to the exact cert fingerprint. Each backend
+// lease owns a trust record so old windows keep working after settings change.
 interface BackendCertificateTrust {
   hostname: string;
   fingerprint: string | null;
@@ -732,16 +737,6 @@ app.on('open-url', async (_event, url) => {
   }
 });
 
-// Handle macOS drag-and-drop onto dock icon
-app.on('will-finish-launching', () => {
-  if (process.platform === 'darwin') {
-    app.setAboutPanelOptions({
-      applicationName: SAYGM_PRODUCT.name,
-      applicationVersion: app.getVersion(),
-    });
-  }
-});
-
 // Handle drag-and-drop onto dock icon
 app.on('open-file', async (event, filePath) => {
   event.preventDefault();
@@ -1055,6 +1050,7 @@ const windowPowerSaveBlockers = new Map<number, number>(); // windowId -> blocke
 // Track pending initial messages per window
 const pendingInitialMessages = new Map<number, string>(); // windowId -> initialMessage
 const pendingInitialMessageNoAutoSubmit = new Set<number>(); // windowIds whose initialMessage should NOT auto-submit
+const pendingViewNavigations = new Map<number, string>(); // windowId -> view
 
 interface CreateChatOptions {
   initialMessage?: string;
@@ -1474,6 +1470,7 @@ const createChat = async (
   const routeMap: Record<string, string> = {
     chat: '/',
     pair: '/pair',
+    about: '/about',
     settings: '/settings',
     sessions: '/sessions',
     schedules: '/schedules',
@@ -1525,6 +1522,7 @@ const createChat = async (
 
     pendingInitialMessages.delete(windowId);
     pendingDeepLinks.delete(windowId);
+    pendingViewNavigations.delete(windowId);
     reactReadyWindows.delete(windowId);
 
     if (windowPowerSaveBlockers.has(windowId)) {
@@ -1955,6 +1953,12 @@ ipcMain.on('react-ready', (event) => {
     reactReadyWindows.add(windowId);
   }
 
+  if (windowId && window && pendingViewNavigations.has(windowId)) {
+    const view = pendingViewNavigations.get(windowId)!;
+    pendingViewNavigations.delete(windowId);
+    window.webContents.send('set-view', view);
+  }
+
   // Send any pending initial message for this window
   if (windowId && pendingInitialMessages.has(windowId)) {
     const initialMessage = pendingInitialMessages.get(windowId)!;
@@ -2029,7 +2033,6 @@ const validSettingKeys: Set<string> = new Set([
   'seenAnnouncementIds',
   'disableAutoDownload',
   'recentModels',
-  'useLegacyAgentLoop',
 ]);
 
 ipcMain.handle('set-setting', (_event, key: SettingKey, value: unknown) => {
@@ -2578,6 +2581,47 @@ async function appMain() {
   const shortcuts = getKeyboardShortcuts(settings);
 
   const appMenu = menu?.items.find((item) => item.label === 'SayGM');
+  const openAbout = () => {
+    const regularWindows = getRegularWindows();
+    const focusedWindow = BrowserWindow.getFocusedWindow();
+    const targetWindow =
+      regularWindows.find((window) => window === focusedWindow) ?? regularWindows[0];
+    if (!targetWindow) {
+      void createChat(app, { dir: loadRecentDirs()[0], viewType: 'about' });
+      return;
+    }
+
+    if (targetWindow.isMinimized()) targetWindow.restore();
+    targetWindow.show();
+    targetWindow.focus();
+
+    if (reactReadyWindows.has(targetWindow.id) && !targetWindow.webContents.isLoadingMainFrame()) {
+      targetWindow.webContents.send('set-view', 'about');
+    } else {
+      pendingViewNavigations.set(targetWindow.id, 'about');
+    }
+  };
+
+  if (process.platform === 'darwin' && appMenu?.submenu) {
+    const aboutMenuItem = appMenu.submenu.items.find(
+      (item) => item.role === 'about' || item.label.startsWith('About')
+    );
+
+    if (aboutMenuItem) {
+      aboutMenuItem.role = undefined;
+      aboutMenuItem.label = menuT('About SayGM');
+      aboutMenuItem.click = openAbout;
+      aboutMenuItem.submenu = undefined;
+    } else {
+      appMenu.submenu.insert(
+        0,
+        new MenuItem({
+          label: menuT('About SayGM'),
+          click: openAbout,
+        })
+      );
+    }
+  }
   if (appMenu?.submenu) {
     appMenu.submenu.insert(1, new MenuItem({ type: 'separator' }));
     if (shortcuts.settings) {
@@ -2807,28 +2851,16 @@ async function appMain() {
 
     // Ensure the Help menu has a submenu before appending
     if (helpMenu.submenu) {
-      // Add a separator before the About item if the submenu is not empty
       if (helpMenu.submenu.items.length > 0) {
         helpMenu.submenu.append(new MenuItem({ type: 'separator' }));
       }
 
-      // Create the About SayGM menu item with a submenu
-      const aboutGooseMenuItem = new MenuItem({
-        label: menuT('About SayGM'),
-        submenu: Menu.buildFromTemplate([]), // Start with an empty submenu for About
-      });
-
-      // Add the Version menu item (display only) to the About SayGM submenu
-      if (aboutGooseMenuItem.submenu) {
-        aboutGooseMenuItem.submenu.append(
-          new MenuItem({
-            label: `Version ${version || app.getVersion()}`,
-            enabled: false,
-          })
-        );
-      }
-
-      helpMenu.submenu.append(aboutGooseMenuItem);
+      helpMenu.submenu.append(
+        new MenuItem({
+          label: menuT('About SayGM'),
+          click: openAbout,
+        })
+      );
     }
   }
 
@@ -2980,32 +3012,6 @@ async function appMain() {
     const window = BrowserWindow.fromWebContents(event.sender);
     if (window) {
       window.reload();
-    }
-  });
-
-  ipcMain.on('open-in-chrome', (_event, url) => {
-    try {
-      // Validate URL
-      const parsedUrl = new URL(url);
-
-      // Only allow http and https protocols for browser URLs
-      if (!WEB_PROTOCOLS.includes(parsedUrl.protocol)) {
-        console.error('Invalid URL protocol. Only HTTP and HTTPS are allowed.');
-        return;
-      }
-
-      // On macOS, use the 'open' command with Chrome
-      if (process.platform === 'darwin') {
-        spawn('open', ['-a', 'Google Chrome', url]);
-      } else if (process.platform === 'win32') {
-        // On Windows, start is built-in command of cmd.exe
-        spawn('cmd.exe', ['/c', 'start', '', 'chrome', url]);
-      } else {
-        // On Linux, use xdg-open with chrome
-        spawn('xdg-open', [url]);
-      }
-    } catch (error) {
-      console.error('Error opening URL in browser:', error);
     }
   });
 

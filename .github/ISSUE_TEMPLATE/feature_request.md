@@ -1,6 +1,6 @@
 ---
-name: Feature request
-about: Suggest an idea for this project
+name: SayGM Desktop feature request
+about: Suggest an improvement to SayGM Desktop
 title: ''
 type: 'feature'
 assignees: ''
@@ -19,6 +19,6 @@ Share any approaches, constraints, or trade-offs the design discussion should co
 **Additional context**
 Add any other context or screenshots about the feature request here.
 
-- [x] I have verified this does not duplicate an existing feature request
+- [ ] I have checked for an existing feature request
 
-Do not begin implementation until the issue reaches **Ready** on the [Goose Issues board](https://github.com/orgs/aaif-goose/projects/1).
+For changes intended for an upstream Goose pull request, the corresponding issue must be on the [Goose Issues board](https://github.com/orgs/aaif-goose/projects/1) with Status **Ready** before implementation.

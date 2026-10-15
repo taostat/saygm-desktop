@@ -18,7 +18,7 @@ permissions:
 
 jobs:
   build:
-    name: Ubuntu 22.04 ${{ matrix.architecture }} RC5
+    name: Ubuntu 22.04 ${{ matrix.architecture }} RC6
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 150
     strategy:
@@ -68,7 +68,7 @@ jobs:
 
       - name: Install and inspect Debian package
         run: |
-          sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb"
+          sudo apt-get install --yes --no-install-recommends "./artifacts/SayGM-0.1.0-rc.6-linux-${{ matrix.architecture }}.deb"
           test "$(dpkg-query -W -f='${Architecture}' saygm)" = "${{ matrix.architecture == 'arm64' && 'arm64' || 'amd64' }}"
           test -x /usr/bin/saygm
           test -x /usr/lib/saygm/SayGM
@@ -115,12 +115,12 @@ jobs:
       - name: Write final checksums
         run: |
           cd artifacts
-          sha256sum "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.deb" "SayGM-0.1.0-rc.5-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
+          sha256sum "SayGM-0.1.0-rc.6-linux-${{ matrix.architecture }}.deb" "SayGM-0.1.0-rc.6-linux-${{ matrix.architecture }}.zip" > SHA256SUMS.txt
 
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: saygm-desktop-0.1.0-rc.5-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
+          name: saygm-desktop-0.1.0-rc.6-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30
