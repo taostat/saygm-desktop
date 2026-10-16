@@ -2,12 +2,16 @@
 
 ## 0.1.0-rc.6 (internal candidate)
 
-- Integrate Goose upstream `main` at `0df818175bc854229746c81f01ea154b1c6c5e9e` while preserving SayGM identity, account policy, pinned backend TLS, and SayGM update behavior.
+- Integrate Goose upstream `main` at `fe55e842fb8d92f16c45d04c83f07120cc4fa258` while preserving SayGM identity, account policy, pinned backend TLS, and SayGM update behavior.
 - Add an About page with a positive Goose attribution, a thank-you to the Goose team and community, and links to Goose and SayGM.com. The native About menu opens this page, including before onboarding.
 - Point in-app ticket raising to the public SayGM Desktop issue forms.
 - Update the Windows installer identity and RC6 platform build and verification metadata.
 
-Desktop lint, typecheck, localization checks and 1,089 UI tests passed (8 skipped). Rust formatting and Clippy passed. The Goose Rust suite has one failing ACP effort-update test; the same test fails on a clean checkout of upstream `0df8181`. RC6 packages have not been built or published, and the public RC5 artifacts remain unchanged.
+Desktop typecheck, lint, localization checks and 1,089 UI tests passed (8 skipped). Rust formatting and Clippy passed; all 2,498 Goose library tests passed. The ACP effort-update test now uses the secret-free Ollama inventory fixture, so it tests notification forwarding without consulting a local OpenAI credential store.
+
+A macOS arm64 internal preview was built with Goose `1.55.0`. The packaged backend checksum matches the native release binary, the app bundle identifier and version were verified, and the extracted bundle passes strict ad-hoc signature verification. Artifact SHA-256: `380d4f70068d4d9f3f0b1b26bb7de2fff92f198416ccfbca07b81f3ba38535f0`.
+
+This is an ad-hoc signed, unnotarized manual preview. In-app updates remain disabled, so it does not upgrade RC5 installs. Ubuntu and Windows packages have not been built or published, no GitHub artifacts have been uploaded, and the public RC5 artifacts remain unchanged.
 
 ## 0.1.0-rc.5 (internal Apple Silicon preview)
 

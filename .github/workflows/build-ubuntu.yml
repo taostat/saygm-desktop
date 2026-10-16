@@ -57,7 +57,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ubuntu-22.04-${{ matrix.architecture }}-rc5
+          key: ubuntu-22.04-${{ matrix.architecture }}-rc6
           cache-on-failure: true
 
       - name: Install locked Node workspace
@@ -83,7 +83,7 @@ jobs:
       - name: Smoke test native app and protected storage
         run: |
           set -euo pipefail
-          export QA_KEYRING_PASSWORD="saygm-rc5-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export QA_KEYRING_PASSWORD="saygm-rc6-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dbus-run-session -- bash -euo pipefail -s <<'BASH'
             export XDG_RUNTIME_DIR="${RUNNER_TEMP}/saygm-runtime"
             export XDG_DATA_HOME="${RUNNER_TEMP}/saygm-xdg-data"

@@ -9,7 +9,7 @@ build_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 build_out=""
 staged_goose="$repo_root/ui/desktop/src/bin/goose"
 source_goose="$repo_root/target/release/goose"
-temporary_stage="${staged_goose}.rc5-tmp"
+temporary_stage="${staged_goose}.rc6-tmp"
 release_version="$(node -p "require('$repo_root/ui/desktop/package.json').version")"
 
 case "$build_arch" in
@@ -43,7 +43,7 @@ if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
 fi
 
 mkdir -p "$artifact_dir" "$build_parent"
-build_out="$(mktemp -d "$build_parent/saygm-ubuntu-rc5-forge.XXXXXX")"
+build_out="$(mktemp -d "$build_parent/saygm-ubuntu-rc6-forge.XXXXXX")"
 staged=false
 source_hash=""
 work_dir=""
@@ -72,6 +72,7 @@ source_hash="$(sha256sum "$source_goose" | cut -d ' ' -f 1)"
 install -m 0755 "$source_goose" "$temporary_stage"
 mv "$temporary_stage" "$staged_goose"
 staged=true
+node "$repo_root/ui/desktop/scripts/prepare-platform-binaries.js"
 
 pnpm --dir ui/desktop run build-goose-acp-client
 pnpm --dir ui/desktop run i18n:compile

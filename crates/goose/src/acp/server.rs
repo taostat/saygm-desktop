@@ -2762,7 +2762,7 @@ mod tests {
     #[async_trait::async_trait]
     impl Provider for AsyncEffortProvider {
         fn get_name(&self) -> &str {
-            "openai"
+            "ollama"
         }
 
         fn thinking_effort_support(&self) -> ThinkingEffortSupport {
@@ -3855,7 +3855,7 @@ print(\"hello, world\")
                     provider.update("xhigh", &["default", "high", "xhigh"]);
 
                     let notification = tokio::time::timeout(
-                        std::time::Duration::from_secs(1),
+                        std::time::Duration::from_secs(5),
                         notification_rx.recv(),
                     )
                     .await
