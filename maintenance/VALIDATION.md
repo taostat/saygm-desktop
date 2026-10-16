@@ -1,32 +1,37 @@
-# Maintenance validation — 2026-10-05
+# Maintenance validation
 
-## RC6 candidate validation — 2026-10-15
+## RC6 candidate validation — 2026-10-16
 
-Candidate integrates Goose `0df818175bc854229746c81f01ea154b1c6c5e9e` with
-SayGM RC5 source and the About and ticket-link updates.
+Candidate commit `544291d67411fe68cc0197812f4785f3efbfb014` merges Goose
+`main` at `fe55e842fb8d92f16c45d04c83f07120cc4fa258` and includes the About
+page, ticket-link update, and RC6 packaging metadata.
 
-- `pnpm run lint:check` passed on macOS arm64 with pinned Node 24.10.0 and pnpm
-  10.30.3; this includes TypeScript typecheck, ESLint, and locale validation
-  (1,612 messages across 15 locales).
-- `pnpm run test:run` passed: 122 files, 1,089 tests; 1 file and 8 tests skipped.
-- `pnpm exec prettier --check src/main.ts` passed. The repository-wide UI
-  `format:check` still reports 59 files, mostly inherited Goose changes; the
-  SayGM-touched UI files were formatted separately.
-- `cargo fmt --all -- --check` passed.
-- `cargo clippy -p goose --all-targets --features
-  portable-default,system-keyring,code-mode,local-inference,online-model-meta --
-  -D warnings` passed.
-- The matching-feature Goose suite ran 2,495 tests: 2,494 passed and
-  `acp::server::tests::asynchronous_provider_effort_update_is_forwarded_to_client`
-  timed out. A clean worktree at the exact Goose revision reproduced the same
-  failure. No SayGM patch was made for this upstream test failure.
-- Native RC6 packages and Linux/Windows platform checks have not run. No RC6
-  artifact or release has been published. The private release destination is
-  still unconfirmed.
+- `cargo fmt` passed. `cargo clippy --all-targets -- -D warnings` passed.
+- `cargo test -p goose --lib --features
+  portable-default,system-keyring,code-mode,local-inference,online-model-meta`
+  passed all 2,498 tests. The ACP effort-update test now uses the secret-free
+  Ollama inventory fixture; the previous OpenAI fixture read the global
+  credential store and made that notification test environment-dependent.
+- `pnpm --dir ui/desktop run lint:check` passed TypeScript, ESLint, and locale
+  validation (1,612 messages across 15 locales).
+- `pnpm --dir ui/desktop run test:run` passed: 122 files, 1,089 tests; 1 file
+  and 8 tests skipped.
+- The macOS arm64 internal preview is at
+  `/Users/mark/Contracts/saygm-desktop-rc6-final-artifacts/SayGM-0.1.0-rc.6-darwin-arm64.zip`.
+  SHA-256: `380d4f70068d4d9f3f0b1b26bb7de2fff92f198416ccfbca07b81f3ba38535f0`.
+  Its embedded Goose `1.55.0` binary matches the native release binary; the
+  extracted app passes strict ad-hoc signature verification and has bundle ID
+  `com.saygm.desktop` and version `0.1.0-rc.6`. The ZIP contains no Windows or
+  legacy Goose binaries.
+- Astra's read-only follow-up confirms the prior code and packaging findings
+  are resolved and found no new provider, account, or TLS policy regression.
+- Ubuntu and Windows packages have not been built. No GitHub artifacts or
+  release have been published. `UPDATES_ENABLED` remains false, so this manual
+  macOS preview cannot upgrade RC5 installs. The configured `origin` is public;
+  the private release destination still needs to be identified.
 
-Runtime source reviewed at `aaa6a16f71c3914e9345d9bc8f123b2f081be63d`.
-Later documentation changes do not alter that source. Implementation used Luna
-developers with independent Astra review.
+This is a verified macOS internal preview, not a completed multi-platform or
+published RC6 release.
 
 ## Results
 
