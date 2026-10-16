@@ -33,7 +33,7 @@ page, ticket-link update, and RC6 packaging metadata.
 This is a verified macOS internal preview, not a completed multi-platform or
 published RC6 release.
 
-## Results
+## Historical maintenance results — 2026-10-05
 
 - Full desktop suite: 122 files, 1,093 tests passed; desktop typecheck and production
   renderer build passed on pinned Node 24.10.0 / pnpm 10.30.3.
@@ -55,7 +55,7 @@ published RC6 release.
 - The ancestry bridge kept an identical source tree. Existing private history,
   repository visibility, RC5 tag and release assets were preserved.
 
-## Upstream rehearsal
+## Historical upstream rehearsal
 
 Pinned candidate: `d7ce0cdf8c4e1fb55aabed5b6717f141c4c8220f`, 14 commits after
 the incorporated `bab8ff6` base. Both the unified pre-refactor baseline and the final
