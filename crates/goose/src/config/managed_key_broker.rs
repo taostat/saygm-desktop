@@ -423,7 +423,7 @@ mod unix {
         BrokerClient::new(unsafe { File::from_raw_fd(fd) }, timeout)
     }
 
-    #[cfg(test)]
+    #[cfg(all(test, feature = "system-keyring"))]
     pub(super) fn with_test_broker<T>(
         stream: UnixStream,
         timeout: Duration,
@@ -647,7 +647,7 @@ pub(crate) fn model_key_matches(sha256: &str) -> Result<bool, String> {
     unix::model_key_matches(sha256)
 }
 
-#[cfg(all(test, unix))]
+#[cfg(all(test, unix, feature = "system-keyring"))]
 pub(crate) fn with_test_broker<T>(
     stream: std::os::unix::net::UnixStream,
     timeout: std::time::Duration,
