@@ -7,6 +7,7 @@ export type GmAccountStatus = {
   secureStorageAvailable: boolean;
   remoteCleanupPending: boolean;
   managedKeyAvailable?: boolean;
+  legacyKeyCleanupPending?: boolean;
 };
 
 export type GmOAuthCapability = {
@@ -95,6 +96,7 @@ export type GmAccountApi = {
   connectApiKey: (key: string) => Promise<GmAccountStatus>;
   finishProviderSetup: () => Promise<GmAccountStatus>;
   logout: () => Promise<void>;
+  clearLegacyApiKey: () => Promise<{ removed: boolean }>;
   openTopup: () => Promise<void>;
 };
 

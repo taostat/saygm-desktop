@@ -42,8 +42,10 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
   let nodeWithoutNpxDir: string;
   let failingNodeDir: string;
   let brokenNpmDir: string;
-  let portableNodeDir: string;
-  let emptyNodeDir: string;
+  let legacyGooseNodeDir: string;
+  let saygmLocalAppDataDir: string;
+  let saygmPortableNodeDir: string;
+  let emptyLocalAppDataDir: string;
 
   function makeDir(name: string) {
     const dir = path.join(rootDir, name);
@@ -54,7 +56,7 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
   function runWrapper(options: {
     pathDirs: string[];
     args: string[];
-    goosePortableDir?: string;
+    localAppDataDir?: string;
     exitCode?: number;
   }) {
     const args = options.args.map((arg) => (/[\s^&|<>]/.test(arg) ? `"${arg}"` : arg));
@@ -70,9 +72,10 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
           SystemRoot: process.env.SystemRoot,
           ComSpec: process.env.ComSpec,
           PATHEXT: process.env.PATHEXT,
+          LOCALAPPDATA: options.localAppDataDir ?? emptyLocalAppDataDir,
+          GOOSE_NODE_DIR: legacyGooseNodeDir,
           TEMP: rootDir,
           TMP: rootDir,
-          GOOSE_NODE_DIR: options.goosePortableDir ?? emptyNodeDir,
           FAKE_NPX_REPORT: path.join(rootDir, 'report.js'),
           FAKE_NPX_EXIT: String(options.exitCode ?? 0),
           // PowerShell is not on PATH, so the download step fails at once instead of using the network.
@@ -105,15 +108,25 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
     fs.linkSync(path.join(systemNodeDir, 'node.exe'), path.join(brokenNpmDir, 'node.exe'));
     fs.writeFileSync(path.join(brokenNpmDir, 'npx.cmd'), brokenNpx);
 
-    portableNodeDir = makeDir('portable node');
-    fs.linkSync(path.join(systemNodeDir, 'node.exe'), path.join(portableNodeDir, 'node.exe'));
-    fs.writeFileSync(path.join(portableNodeDir, 'npx.cmd'), fakeNpx);
+    saygmLocalAppDataDir = makeDir('SayGM LocalAppData');
+    saygmPortableNodeDir = path.join(saygmLocalAppDataDir, 'SayGM', 'node');
+    fs.mkdirSync(saygmPortableNodeDir, { recursive: true });
+    fs.linkSync(path.join(systemNodeDir, 'node.exe'), path.join(saygmPortableNodeDir, 'node.exe'));
+    fs.writeFileSync(path.join(saygmPortableNodeDir, 'npx.cmd'), fakeNpx);
     const portableVersion = /SET "NODE_VERSION=([\d.]+)"/.exec(
       fs.readFileSync(wrapperPath, 'utf8')
     );
-    fs.writeFileSync(path.join(portableNodeDir, `node-v${portableVersion?.[1]}.installed`), '');
+    fs.writeFileSync(
+      path.join(saygmPortableNodeDir, `node-v${portableVersion?.[1]}.installed`),
+      ''
+    );
 
-    emptyNodeDir = makeDir('empty node');
+    legacyGooseNodeDir = makeDir('legacy Goose node override');
+    fs.linkSync(path.join(systemNodeDir, 'node.exe'), path.join(legacyGooseNodeDir, 'node.exe'));
+    fs.writeFileSync(path.join(legacyGooseNodeDir, 'npx.cmd'), fakeNpx);
+    fs.writeFileSync(path.join(legacyGooseNodeDir, `node-v${portableVersion?.[1]}.installed`), '');
+
+    emptyLocalAppDataDir = makeDir('empty LocalAppData');
   }, 60_000);
 
   afterAll(() => {
@@ -138,6 +151,13 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
     expect(child.stdin).toBe('first line\nsecond line\n');
   });
 
+  it('ignores a valid legacy GOOSE_NODE_DIR override', () => {
+    const result = runWrapper({ pathDirs: [systemNodeDir], args: ['-y', 'pkg'] });
+
+    expect(result.status).toBe(0);
+    expect((JSON.parse(result.stdout) as ChildReport).nodeDir).toBe(systemNodeDir);
+  });
+
   it('skips a Node.js whose npx does not run', () => {
     const result = runWrapper({ pathDirs: [brokenNpmDir, systemNodeDir], args: ['-y', 'pkg'] });
 
@@ -153,16 +173,16 @@ describe.skipIf(process.platform !== 'win32')('Windows npx wrapper', () => {
     expect((JSON.parse(result.stdout) as ChildReport).nodeDir).toBe(systemNodeDir);
   });
 
-  it('keeps the Goose portable Node.js first when it is installed', () => {
+  it('keeps SayGM portable Node.js first when it is installed', () => {
     const result = runWrapper({
       pathDirs: [systemNodeDir],
       args: ['-y', 'pkg'],
-      goosePortableDir: portableNodeDir,
+      localAppDataDir: saygmLocalAppDataDir,
       exitCode: 5,
     });
 
     expect(result.status).toBe(5);
-    expect((JSON.parse(result.stdout) as ChildReport).nodeDir).toBe(portableNodeDir);
+    expect((JSON.parse(result.stdout) as ChildReport).nodeDir).toBe(saygmPortableNodeDir);
   });
 
   it.each<[string, () => string[]]>([

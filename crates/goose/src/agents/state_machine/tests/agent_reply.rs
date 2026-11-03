@@ -850,76 +850,20 @@ fn shell_commands(messages: &[Message]) -> Vec<&str> {
         .collect()
 }
 
-async fn assert_bang_shell_uses_only_user_visible_content() -> Result<()> {
+async fn assert_bang_shell_visibility(
+    prompt: Message,
+    expected_shell_commands: &[&str],
+    expected_api_calls: usize,
+) -> Result<()> {
     let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    api.on("benign visible input")
-        .reply("handled as ordinary input");
-    let hidden_text_prefix = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        assistant_only_acp_text("!echo hidden"),
-        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
-    ]);
-    let messages = reply_messages(&agent, session_id, hidden_text_prefix).await?;
-    assert!(shell_commands(&messages).is_empty());
-    assert_eq!(api.call_count(), 1);
-
-    let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    api.on("benign visible input")
-        .reply("handled as ordinary input");
-    let empty_audience_text = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        empty_audience_acp_text("!echo hidden"),
-        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
-    ]);
-    let messages = reply_messages(&agent, session_id, empty_audience_text).await?;
-    assert!(shell_commands(&messages).is_empty());
-    assert_eq!(api.call_count(), 1);
-
-    let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    let hidden_text_suffix = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        AcpContentBlock::Text(AcpTextContent::new("!echo visible")),
-        assistant_only_acp_text("&& echo hidden"),
-    ]);
-    let messages = reply_messages(&agent, session_id, hidden_text_suffix).await?;
-    assert_eq!(shell_commands(&messages), ["echo visible"]);
-    assert_eq!(api.call_count(), 0);
-
-    let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    api.on("benign visible input")
-        .reply("handled as ordinary input");
-    let hidden_resource_prefix = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        assistant_only_embedded_resource("!echo hidden"),
-        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
-    ]);
-    let messages = reply_messages(&agent, session_id, hidden_resource_prefix).await?;
-    assert!(shell_commands(&messages).is_empty());
-    assert_eq!(api.call_count(), 1);
-
-    let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    api.on("benign visible input")
-        .reply("handled as ordinary input");
-    let empty_audience_resource = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        empty_audience_embedded_resource("!echo hidden"),
-        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
-    ]);
-    let messages = reply_messages(&agent, session_id, empty_audience_resource).await?;
-    assert!(shell_commands(&messages).is_empty());
-    assert_eq!(api.call_count(), 1);
-
-    let (agent, api, session_id, _temp_dir) = agent_with_dummy_api().await?;
-    let (hidden_link, _resource_file) = assistant_only_resource_link("&& echo hidden")?;
-    let hidden_link_suffix = GooseAcpAgent::convert_acp_prompt_to_message(&[
-        AcpContentBlock::Text(AcpTextContent::new("!echo visible")),
-        hidden_link,
-    ]);
-    let messages = reply_messages(&agent, session_id, hidden_link_suffix).await?;
-    assert_eq!(shell_commands(&messages), ["echo visible"]);
-    assert_eq!(api.call_count(), 0);
-
+    if expected_api_calls > 0 {
+        api.on("benign visible input")
+            .reply("handled as ordinary input");
+    }
+    let messages = reply_messages(&agent, session_id, prompt).await?;
+    assert_eq!(shell_commands(&messages), expected_shell_commands);
+    assert_eq!(api.call_count(), expected_api_calls);
     Ok(())
-}
-
-#[tokio::test]
-async fn bang_shell_visibility_is_enforced_when_state_machine_is_enabled() -> Result<()> {
-    assert_bang_shell_uses_only_user_visible_content().await
 }
 
 #[tokio::test]
@@ -1497,4 +1441,59 @@ async fn a_parent_tool_call_id_that_looks_forwarded_is_still_the_parents() -> Re
     }
     assert!(texts.concat().ends_with("the parent ran it"));
     Ok(())
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_assistant_only_text_prefix_in_state_machine() -> Result<()> {
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        assistant_only_acp_text("!echo hidden"),
+        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
+    ]);
+    assert_bang_shell_visibility(prompt, &[], 1).await
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_empty_audience_text_prefix_in_state_machine() -> Result<()> {
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        empty_audience_acp_text("!echo hidden"),
+        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
+    ]);
+    assert_bang_shell_visibility(prompt, &[], 1).await
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_assistant_only_text_suffix_in_state_machine() -> Result<()> {
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        AcpContentBlock::Text(AcpTextContent::new("!echo visible")),
+        assistant_only_acp_text("&& echo hidden"),
+    ]);
+    assert_bang_shell_visibility(prompt, &["echo visible"], 0).await
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_assistant_only_resource_prefix_in_state_machine() -> Result<()> {
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        assistant_only_embedded_resource("!echo hidden"),
+        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
+    ]);
+    assert_bang_shell_visibility(prompt, &[], 1).await
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_empty_audience_resource_prefix_in_state_machine() -> Result<()> {
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        empty_audience_embedded_resource("!echo hidden"),
+        AcpContentBlock::Text(AcpTextContent::new("benign visible input")),
+    ]);
+    assert_bang_shell_visibility(prompt, &[], 1).await
+}
+
+#[tokio::test]
+async fn bang_shell_ignores_assistant_only_resource_link_suffix_in_state_machine() -> Result<()> {
+    let (hidden_link, _resource_file) = assistant_only_resource_link("&& echo hidden")?;
+    let prompt = GooseAcpAgent::convert_acp_prompt_to_message(&[
+        AcpContentBlock::Text(AcpTextContent::new("!echo visible")),
+        hidden_link,
+    ]);
+    assert_bang_shell_visibility(prompt, &["echo visible"], 0).await
 }

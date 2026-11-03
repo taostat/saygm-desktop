@@ -32,7 +32,7 @@ describe('DesktopFileAccess', () => {
     fs.writeFileSync(path.join(workingDirectory, '.goosehints'), 'project guidance');
     const access = new DesktopFileAccess();
     await access.bindWindow(7, workingDirectory);
-    const canonicalWorkingDirectory = fs.realpathSync(workingDirectory);
+    const canonicalWorkingDirectory = await fsPromises.realpath(workingDirectory);
 
     await expect(access.readGoosehints(7)).resolves.toEqual({
       file: 'project guidance',
@@ -46,7 +46,7 @@ describe('DesktopFileAccess', () => {
     const workingDirectory = makeTempDirectory();
     const access = new DesktopFileAccess();
     await access.bindWindow(7, workingDirectory);
-    const canonicalWorkingDirectory = fs.realpathSync(workingDirectory);
+    const canonicalWorkingDirectory = await fsPromises.realpath(workingDirectory);
 
     await expect(access.readGoosehints(7)).resolves.toEqual({
       file: '',
