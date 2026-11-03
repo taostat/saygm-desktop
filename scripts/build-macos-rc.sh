@@ -7,15 +7,15 @@ artifact_dir="$(mkdir -p "$artifact_dir" && cd "$artifact_dir" && pwd)"
 build_parent="${TMPDIR:-/tmp}"
 staged_goose="$repo_root/ui/desktop/src/bin/goose"
 source_goose="$repo_root/target/release/goose"
-temporary_stage="${staged_goose}.rc6-tmp"
+temporary_stage="${staged_goose}.release-tmp"
 release_version="$(node -p "require('$repo_root/ui/desktop/package.json').version")"
 
 if [[ "$(uname -s)" != Darwin || "$(uname -m)" != arm64 ]]; then
   echo "This release build must run on native macOS arm64." >&2
   exit 2
 fi
-if [[ "$release_version" != 0.1.0-rc.6 ]]; then
-  echo "Expected desktop version 0.1.0-rc.6, found $release_version." >&2
+if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Desktop version must be a semantic version with an optional prerelease label, found $release_version." >&2
   exit 2
 fi
 if [[ -n "${APPLE_TEAM_ID:-}" ]]; then
@@ -29,12 +29,12 @@ fi
 
 artifact="$artifact_dir/SayGM-${release_version}-darwin-arm64.zip"
 if [[ -e "$artifact" ]]; then
-  echo "Refusing to overwrite existing macOS RC6 artifact: $artifact" >&2
+  echo "Refusing to overwrite existing macOS artifact: $artifact" >&2
   exit 2
 fi
 
 mkdir -p "$artifact_dir" "$build_parent"
-build_out="$(mktemp -d "$build_parent/saygm-macos-rc6-forge.XXXXXX")"
+build_out="$(mktemp -d "$build_parent/saygm-macos-${release_version}-forge.XXXXXX")"
 staged=false
 source_hash=""
 cleanup() {
@@ -66,16 +66,16 @@ node "$repo_root/ui/desktop/scripts/prepare-platform-binaries.js"
 
 pnpm --dir ui/desktop run build-goose-acp-client
 pnpm --dir ui/desktop run i18n:compile
-SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH=arm64 pnpm --dir ui/desktop exec electron-forge make \
+SAYGM_MACOS_SOURCE_BACKEND_SHA256="$source_hash" SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH=arm64 pnpm --dir ui/desktop exec electron-forge make \
   --platform=darwin \
   --arch=arm64 \
   --targets=@electron-forge/maker-zip
 
 app_path="$build_out/SayGM-darwin-arm64/SayGM.app"
-backend_path="$app_path/Contents/Resources/bin/goose"
+backend_path="$app_path/Contents/Resources/bin/saygm-agent"
 test -d "$app_path"
 test -x "$backend_path"
-if find "$app_path/Contents/Resources/bin" -type f \( -name '*.exe' -o -name '*.dll' -o -name '*.cmd' -o -name goosed \) -print -quit | grep -q .; then
+if find "$app_path/Contents/Resources/bin" -type f \( -name '*.exe' -o -name '*.dll' -o -name '*.cmd' -o -name goose -o -name goosed \) -print -quit | grep -q .; then
   echo "Packaged resources contain a Windows or legacy Goose binary." >&2
   exit 1
 fi
