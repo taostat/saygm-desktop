@@ -28,6 +28,13 @@ pub const SAYGM_API_KEY: &str = "SAYGM_API_KEY";
 const SAYGM_API_HOST: &str = "https://api.saygm.com";
 const SAYGM_CHAT_COMPLETIONS_PATH: &str = "/v1/chat/completions";
 const SAYGM_MODELS_PATH: &str = "v1/models";
+const SHAPE_CHAT_COMPLETIONS: &str = "chat.completions";
+const SHAPE_MESSAGES: &str = "messages";
+
+/// Catalog `api_shapes` this provider can route. The model inventory cache is
+/// keyed on this list, so supporting a new shape re-fetches the catalog
+/// instead of serving a list cached by an older build for up to a day.
+pub const SAYGM_ROUTED_API_SHAPES: [&str; 2] = [SHAPE_CHAT_COMPLETIONS, SHAPE_MESSAGES];
 
 const SAYGM_CATALOG_TTL: Duration = Duration::from_secs(300);
 static SAYGM_CATALOG: RwLock<Option<(Instant, Vec<SaygmModel>)>> = RwLock::const_new(None);
@@ -44,9 +51,9 @@ impl SaygmApiShape {
     /// chat completions when a model offers both.
     fn select(shapes: &[Value]) -> Option<Self> {
         let offers = |name: &str| shapes.iter().any(|shape| shape.as_str() == Some(name));
-        if offers("chat.completions") {
+        if offers(SHAPE_CHAT_COMPLETIONS) {
             Some(Self::ChatCompletions)
-        } else if offers("messages") {
+        } else if offers(SHAPE_MESSAGES) {
             Some(Self::Messages)
         } else {
             None

@@ -20,6 +20,7 @@ use crate::providers::muse_code_def;
 use crate::providers::ollama::OLLAMA_PROVIDER_NAME;
 use crate::providers::openai::{OPEN_AI_DEFAULT_BASE_PATH, OPEN_AI_PROVIDER_NAME};
 use crate::providers::pi_acp::{PI_ACP_BINARY, PI_ACP_PROVIDER_NAME};
+use crate::providers::saygm::{SaygmProviderDef, SAYGM_ROUTED_API_SHAPES};
 use crate::providers::xai_oauth::TokenCache as XaiOAuthTokenCache;
 use goose_providers::azure_foundry::{endpoint_kind, EndpointKind, AZURE_FOUNDRY_PROVIDER_NAME};
 
@@ -196,6 +197,21 @@ pub fn refresh_only() -> InventoryRegistration {
     }
 }
 
+pub fn saygm_inventory() -> InventoryRegistration {
+    InventoryRegistration::new(true, saygm_inventory_identity)
+}
+
+fn saygm_inventory_identity() -> anyhow::Result<InventoryIdentityInput> {
+    let metadata = SaygmProviderDef::metadata();
+    Ok(default_inventory_identity(
+        &metadata.name,
+        &metadata.name,
+        &metadata.config_keys,
+        Config::global(),
+    )
+    .with_public("routed_api_shapes", SAYGM_ROUTED_API_SHAPES.join(",")))
+}
+
 pub fn kimi_code_inventory() -> InventoryRegistration {
     refresh_only().with_configured(kimicode::has_configured_token)
 }
@@ -292,6 +308,41 @@ mod tests {
             Some("https://hub.services.ai.azure.com"),
             None,
         ));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn saygm_inventory_key_differs_from_pre_messages_builds() {
+        let root = tempfile::tempdir().unwrap();
+        let root_path = root.path().to_string_lossy().to_string();
+        let _guard = env_lock::lock_env([("GOOSE_PATH_ROOT", Some(root_path.as_str()))]);
+        let metadata = SaygmProviderDef::metadata();
+        let chat_only_build_key = default_inventory_identity(
+            &metadata.name,
+            &metadata.name,
+            &metadata.config_keys,
+            Config::global(),
+        )
+        .into_identity()
+        .unwrap()
+        .inventory_key;
+
+        let registration = saygm_inventory();
+        let identity = (registration.identity)().unwrap();
+
+        assert!(registration.supports_refresh);
+        assert_eq!(identity.provider_id, metadata.name);
+        assert_eq!(
+            identity
+                .public_inputs
+                .get("routed_api_shapes")
+                .map(String::as_str),
+            Some("chat.completions,messages")
+        );
+        assert_ne!(
+            identity.into_identity().unwrap().inventory_key,
+            chat_only_build_key
+        );
     }
 
     #[test]

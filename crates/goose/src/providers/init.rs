@@ -162,8 +162,10 @@ async fn init_registry() -> RwLock<ProviderRegistry> {
             true,
             Some(registrations::openai_inventory()),
         );
-        registry
-            .register_with_inventory::<SaygmProviderDef>(true, Some(registrations::refresh_only()));
+        registry.register_with_inventory::<SaygmProviderDef>(
+            true,
+            Some(registrations::saygm_inventory()),
+        );
         registry.register_with_inventory::<OpenRouterProviderDef>(
             true,
             Some(registrations::refresh_only().with_configured(|| {
