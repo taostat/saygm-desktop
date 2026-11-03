@@ -5,7 +5,7 @@ From the repository root on an Apple Silicon Mac:
 ```sh
 source bin/activate-hermit
 pnpm --dir ui install --frozen-lockfile
-scripts/build-macos-rc.sh ../saygm-desktop-rc6-artifacts
+scripts/build-macos-rc.sh ../saygm-desktop-beta3-artifacts
 ```
 
 The script builds the Goose backend, packages it with SayGM Desktop, ad-hoc

@@ -1,18 +1,16 @@
 # SayGM Desktop release candidates
 
-## 0.1.0-rc.6 (internal candidate)
+## 0.1.0-beta.3 (candidate, unreleased)
 
-- Integrate Goose upstream `main` at `fe55e842fb8d92f16c45d04c83f07120cc4fa258` while preserving SayGM identity, account policy, pinned backend TLS, and SayGM update behavior.
-- Add an About page with a positive Goose attribution, a thank-you to the Goose team and community, and links to Goose and SayGM.com. The native About menu opens this page, including before onboarding.
+Changes since 0.1.0-beta.2:
+
+- Offer SayGM's Claude models. The SayGM catalog lists them on the Messages API only, so they were previously hidden; they are now sent to the gateway's `/v1/messages` endpoint, and chat completions is still used for models that offer both.
+- Integrate Goose upstream `main` at `fe55e842fb8d92f16c45d04c83f07120cc4fa258` (Goose `1.55.0`) while preserving SayGM identity, account policy, pinned backend TLS, SayGM update behavior, and beta.2's centralized macOS model credentials and managed-key reuse.
+- Add an About page with a positive Goose attribution, a thank-you to the Goose team and community, and links to Goose and SayGM.com. On macOS the app menu's About SayGM entry opens this page, including before onboarding, and the page has a Back button.
 - Point in-app ticket raising to the public SayGM Desktop issue forms.
-- Update the Windows installer identity and RC6 platform build and verification metadata.
-- Offer SayGM's Claude models, routed through the gateway's Messages API.
+- Update the Windows installer identity.
 
-Desktop typecheck, lint, localization checks and 1,089 UI tests passed (8 skipped). Rust formatting and Clippy passed; all 2,498 Goose library tests passed. The ACP effort-update test now uses the secret-free Ollama inventory fixture, so it tests notification forwarding without consulting a local OpenAI credential store.
-
-A macOS arm64 internal preview was built with Goose `1.55.0`. The packaged backend checksum matches the native release binary, the app bundle identifier and version were verified, and the extracted bundle passes strict ad-hoc signature verification. Artifact SHA-256: `380d4f70068d4d9f3f0b1b26bb7de2fff92f198416ccfbca07b81f3ba38535f0`.
-
-This is an ad-hoc signed, unnotarized manual preview. In-app updates remain disabled, so it does not upgrade RC5 installs. Ubuntu and Windows packages have not been built or published, no GitHub artifacts have been uploaded, and the public RC5 artifacts remain unchanged.
+This folds in the unpublished 0.1.0-rc.6 candidate. No beta.3 packages have been signed, notarized, or published.
 
 ## 0.1.0-rc.5 (internal Apple Silicon preview)
 
