@@ -7,6 +7,7 @@
 - Reconcile the reviewed Windows and Ubuntu sources into one maintenance branch.
 - Centralise desktop product configuration and separate SayGM styles from the shared stylesheet.
 - Centralise backend prompt identity and desktop storage policy while retaining existing behaviour.
+- Offer SayGM's Claude models, routed through the gateway's Messages API.
 
 These are source changes. Existing RC5 downloads are unchanged; adopting a newer Goose revision and publishing new platform packages remain separate steps.
 
