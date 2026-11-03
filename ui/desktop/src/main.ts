@@ -2633,24 +2633,21 @@ async function appMain() {
   };
 
   if (process.platform === 'darwin' && appMenu?.submenu) {
-    const aboutMenuItem = appMenu.submenu.items.find(
+    const aboutMenuIndex = appMenu.submenu.items.findIndex(
       (item) => item.role === 'about' || item.label.startsWith('About')
     );
 
-    if (aboutMenuItem) {
-      aboutMenuItem.role = undefined;
-      aboutMenuItem.label = menuT('About SayGM');
-      aboutMenuItem.click = openAbout;
-      aboutMenuItem.submenu = undefined;
-    } else {
-      appMenu.submenu.insert(
-        0,
-        new MenuItem({
-          label: menuT('About SayGM'),
-          click: openAbout,
-        })
-      );
+    if (aboutMenuIndex >= 0) {
+      appMenu.submenu.items[aboutMenuIndex].visible = false;
     }
+
+    appMenu.submenu.insert(
+      Math.max(aboutMenuIndex, 0),
+      new MenuItem({
+        label: menuT('About SayGM'),
+        click: openAbout,
+      })
+    );
   }
   if (appMenu?.submenu) {
     appMenu.submenu.insert(1, new MenuItem({ type: 'separator' }));

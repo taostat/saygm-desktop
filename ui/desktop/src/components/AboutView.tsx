@@ -1,6 +1,8 @@
 import { ArrowUpRight } from 'lucide-react';
+import { useNavigate } from 'react-router';
 import { defineMessages, useIntl } from '../i18n';
 import GooseLogo from './GooseLogo';
+import BackButton from './ui/BackButton';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from './ui/card';
 
 const i18n = defineMessages({
@@ -18,6 +20,7 @@ const i18n = defineMessages({
 
 export default function AboutView() {
   const intl = useIntl();
+  const navigate = useNavigate();
   const version = window.electron.getVersion();
 
   return (
@@ -25,6 +28,7 @@ export default function AboutView() {
       <div aria-hidden="true" className="gm-page-glow" />
       <div className="relative flex min-h-full items-center justify-center px-6 pb-12 pt-16 lg:px-[72px]">
         <div className="w-full max-w-[820px]">
+          <BackButton onClick={() => navigate('/')} size="sm" variant="ghost" className="mb-4" />
           <Card className="gap-0 overflow-hidden rounded-xl py-0 shadow-lg">
             <div className="h-1.5 bg-gm-yellow" aria-hidden="true" />
             <CardHeader className="pb-5 pt-7">
