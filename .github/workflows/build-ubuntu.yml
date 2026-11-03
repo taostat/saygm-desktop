@@ -18,12 +18,12 @@ permissions:
 
 jobs:
   build:
-    name: Ubuntu 22.04 ${{ matrix.architecture }} beta.1
+    name: Ubuntu 22.04 ${{ matrix.architecture }} beta.3
     runs-on: ${{ matrix.architecture == 'arm64' && 'ubuntu-22.04-arm' || 'ubuntu-22.04' }}
     timeout-minutes: 150
     env:
-      SAYGM_BETA_VERSION: 0.1.0-beta.1
-      SAYGM_PRODUCT_SOURCE_SHA: 3f1ae1faca899815dab3447f2eb032c3072218d6
+      SAYGM_BETA_VERSION: 0.1.0-beta.3
+      SAYGM_PRODUCT_SOURCE_SHA: 9f8070b88a710dcc63e928b788b49792234a8b43
     strategy:
       fail-fast: false
       matrix:
@@ -119,7 +119,7 @@ jobs:
       - name: Smoke test native app and protected storage
         run: |
           set -euo pipefail
-          export QA_KEYRING_PASSWORD="saygm-beta1-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          export QA_KEYRING_PASSWORD="saygm-beta3-disposable-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           dbus-run-session -- bash -euo pipefail -s <<'BASH'
             export XDG_RUNTIME_DIR="${RUNNER_TEMP}/saygm-runtime"
             export XDG_DATA_HOME="${RUNNER_TEMP}/saygm-xdg-data"
@@ -158,7 +158,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: saygm-desktop-0.1.0-beta.1-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
+          name: saygm-desktop-0.1.0-beta.3-ubuntu-${{ matrix.architecture }}-run-${{ github.run_id }}
           path: artifacts/
           if-no-files-found: error
           retention-days: 30

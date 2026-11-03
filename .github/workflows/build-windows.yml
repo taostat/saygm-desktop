@@ -1,9 +1,6 @@
 name: Build SayGM Desktop for Windows
 
 on:
-  push:
-    branches:
-      - maintenance/goose-update-beta3
   workflow_dispatch:
 
 permissions:
@@ -52,13 +49,13 @@ jobs:
         run: pnpm run test:run
 
   build-windows-x64:
-    name: Native Windows x64 beta.1 build, installer, and smoke checks
+    name: Native Windows x64 beta.3 build, installer, and smoke checks
     runs-on: windows-latest
     needs: desktop-windows-tests
     timeout-minutes: 120
     env:
-      SAYGM_BETA_VERSION: 0.1.0-beta.1
-      SAYGM_PRODUCT_SOURCE_SHA: 3f1ae1faca899815dab3447f2eb032c3072218d6
+      SAYGM_BETA_VERSION: 0.1.0-beta.3
+      SAYGM_PRODUCT_SOURCE_SHA: 9f8070b88a710dcc63e928b788b49792234a8b43
     steps:
       - name: Check out source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -479,7 +476,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: saygm-desktop-windows-x64-beta.1-${{ github.sha }}
+          name: saygm-desktop-windows-x64-beta.3-${{ github.sha }}
           path: dist-windows/
           if-no-files-found: error
           retention-days: 90
