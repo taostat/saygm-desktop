@@ -114,8 +114,8 @@ if (betaVersion) {
   cfg.appVersion = betaVersion;
 }
 
-// macOS code signing and notarization via Electron Forge
-// Activated when APPLE_TEAM_ID is set (CI signing builds)
+// macOS code signing via Electron Forge, activated when APPLE_TEAM_ID is set (CI signing builds).
+// The release workflow notarizes with scripts/macos-notary.sh so stapling can be retried.
 if (process.env.APPLE_TEAM_ID) {
   const signingIdentity = process.env.APPLE_SIGNING_IDENTITY;
   const keychain = process.env.KEYCHAIN_PATH;
@@ -138,32 +138,6 @@ if (process.env.APPLE_TEAM_ID) {
         : {}),
     }),
   };
-
-  if (process.env.SAYGM_NOTARIZATION_METHOD === 'app-store-connect') {
-    if (
-      !process.env.APPLE_API_KEY_PATH ||
-      !process.env.APPLE_API_KEY_ID ||
-      !process.env.APPLE_API_ISSUER_ID
-    ) {
-      throw new Error('App Store Connect notarization requires a key file, key ID, and issuer ID.');
-    }
-    cfg.osxNotarize = {
-      appleApiKey: process.env.APPLE_API_KEY_PATH,
-      appleApiKeyId: process.env.APPLE_API_KEY_ID,
-      appleApiIssuer: process.env.APPLE_API_ISSUER_ID,
-    };
-  } else if (process.env.SAYGM_NOTARIZATION_METHOD === 'apple-id') {
-    if (!process.env.APPLE_ID || !process.env.APPLE_ID_PASSWORD) {
-      throw new Error('Apple ID notarization requires an Apple ID and app-specific password.');
-    }
-    cfg.osxNotarize = {
-      appleId: process.env.APPLE_ID,
-      appleIdPassword: process.env.APPLE_ID_PASSWORD,
-      teamId: process.env.APPLE_TEAM_ID,
-    };
-  } else {
-    throw new Error('A supported macOS notarization method must be configured.');
-  }
 }
 
 module.exports = {

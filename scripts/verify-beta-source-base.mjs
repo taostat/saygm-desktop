@@ -14,6 +14,7 @@ const allowedBuildAutomationChanges = new Set([
   '.github/workflows/build-ubuntu.yml',
   '.github/workflows/build-windows.yml',
   'scripts/build-ubuntu-release.sh',
+  'scripts/macos-notary.sh',
   'scripts/qa-native-desktop.mjs',
   'scripts/verify-beta-source-base.mjs',
   'scripts/verify-ubuntu-release.mjs',

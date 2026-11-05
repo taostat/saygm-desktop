@@ -208,6 +208,23 @@ jobs:
           KEYCHAIN_PATH: ${{ steps.apple-certificate.outputs.keychain-path }}
         run: pnpm run bundle:default
 
+      - name: Notarize and staple app bundle
+        shell: bash
+        env:
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_ID_PASSWORD: ${{ secrets.APPLE_ID_PASSWORD }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+        run: |
+          set -euo pipefail
+          app="ui/desktop/out/SayGM-darwin-arm64/SayGM.app"
+          submission="$RUNNER_TEMP/saygm-app-notarization.zip"
+          ditto -c -k --keepParent "$app" "$submission"
+          scripts/macos-notary.sh submit "$submission" "$RUNNER_TEMP/saygm-app-notarization.json"
+          scripts/macos-notary.sh staple "$app"
+          scripts/macos-notary.sh validate "$app"
+
       - name: Verify signed app, notarization, Gatekeeper, and native startup
         shell: bash
         timeout-minutes: 15
@@ -235,10 +252,7 @@ jobs:
           backend_details="$(codesign --display --verbose=4 "$backend" 2>&1)"
           grep -F 'Identifier=com.saygm.desktop.agent' <<< "$backend_details"
           codesign --verify --deep --strict --verbose=2 "$app"
-          if ! xcrun stapler validate -v "$app"; then
-            xcrun stapler staple -v "$app"
-            xcrun stapler validate -v "$app"
-          fi
+          scripts/macos-notary.sh validate "$app"
           spctl --assess --type execute --verbose=4 "$app"
 
           backend_sha="$(shasum -a 256 "$backend" | awk '{print $1}')"
@@ -291,38 +305,17 @@ jobs:
           codesign --force --timestamp --keychain "$KEYCHAIN_PATH" --sign "$APPLE_SIGNING_IDENTITY" "$dmg"
           codesign --verify --strict --verbose=2 "$dmg"
 
-          if [[ "$SAYGM_NOTARIZATION_METHOD" = app-store-connect ]]; then
-            notary_json="$RUNNER_TEMP/saygm-beta-dmg-notarization.json"
-            xcrun notarytool submit "$dmg" \
-              --key "$APPLE_API_KEY_PATH" \
-              --key-id "$APPLE_API_KEY_ID" \
-              --issuer "$APPLE_API_ISSUER_ID" \
-              --wait --output-format json > "$notary_json"
-          else
-            notary_json="$RUNNER_TEMP/saygm-beta-dmg-notarization.json"
-            xcrun notarytool submit "$dmg" \
-              --apple-id "$APPLE_ID" \
-              --password "$APPLE_ID_PASSWORD" \
-              --team-id "$APPLE_TEAM_ID" \
-              --wait --output-format json > "$notary_json"
-          fi
-          node - "$notary_json" <<'NODE'
-          const fs = require('node:fs');
-          const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
-          if (result.status !== 'Accepted') {
-            throw new Error(`DMG notarization was not accepted (status: ${result.status ?? 'missing'}).`);
-          }
-          console.log(`DMG notarization accepted; submission ${result.id ?? 'id unavailable'}.`);
-          NODE
+          notary_json="$RUNNER_TEMP/saygm-beta-dmg-notarization.json"
+          scripts/macos-notary.sh submit "$dmg" "$notary_json"
           node - "$notary_json" artifacts-beta.3/notarization.json <<'NODE'
           const fs = require('node:fs');
           const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           fs.writeFileSync(process.argv[3], `${JSON.stringify({ status: result.status, submission_id: result.id ?? null, artifact: 'DMG' }, null, 2)}\n`);
           NODE
 
-          xcrun stapler staple -v "$dmg"
-          xcrun stapler validate -v "$app"
-          xcrun stapler validate -v "$dmg"
+          scripts/macos-notary.sh staple "$dmg"
+          scripts/macos-notary.sh validate "$app"
+          scripts/macos-notary.sh validate "$dmg"
           spctl --assess --type execute --verbose=4 "$app"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
           shasum -a 256 "$zip" "$dmg" > artifacts-beta.3/SHA256SUMS.txt
