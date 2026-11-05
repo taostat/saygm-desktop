@@ -10,7 +10,7 @@ It is a private, product-specific distribution of [Goose](https://github.com/aai
 
 ## Downloads
 
-Latest release: `0.1.0-beta.2`.
+Latest release: `0.1.0-beta.3`.
 
 | Platform | Availability |
 | --- | --- |
@@ -19,7 +19,7 @@ Latest release: `0.1.0-beta.2`.
 | Ubuntu x64 | Published. |
 | Ubuntu ARM64 | Published. |
 
-Download available builds from the public [SayGM Desktop page](https://saygm.com/desktop).
+Download available builds from the public [SayGM Desktop page](https://saygm.com/apps/desktop).
 
 ## Development
 
