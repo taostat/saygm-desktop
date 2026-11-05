@@ -1,39 +1,42 @@
-name: Build signed SayGM Desktop macOS beta.2
+name: Build signed SayGM Desktop macOS beta.3
 
 on:
   push:
     branches:
-      - codex/keychain-startup-fix
+      - release/beta3
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: saygm-desktop-macos-beta2-${{ github.ref }}
+  group: saygm-desktop-macos-beta3-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
-  build-macos-arm64-beta2:
-    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/codex/keychain-startup-fix'
-    name: Sign, notarize, and verify Apple Silicon beta.2
+  build-macos-arm64-beta3:
+    if: github.repository == 'taostat/saygm-desktop' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && github.ref == 'refs/heads/release/beta3'
+    name: Sign, notarize, and verify Apple Silicon beta.3
     runs-on: macos-15
     timeout-minutes: 240
     env:
       APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
-      SAYGM_BETA_VERSION: 0.1.0-beta.2
+      SAYGM_BETA_VERSION: 0.1.0-beta.3
+      SAYGM_PRODUCT_SOURCE_SHA: 9f8070b88a710dcc63e928b788b49792234a8b43
       SAYGM_BUNDLE_NAME: SayGM
       ELECTRON_ARCH: arm64
     steps:
       - name: Check out trusted beta source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
 
       - name: Verify trusted ref and native Apple Silicon runner
         shell: bash
         run: |
           set -euo pipefail
           test "$GITHUB_REPOSITORY" = "taostat/saygm-desktop"
-          test "$GITHUB_REF" = "refs/heads/codex/keychain-startup-fix"
+          test "$GITHUB_REF" = "refs/heads/release/beta3"
           case "$GITHUB_EVENT_NAME" in
             push|workflow_dispatch) ;;
             *) echo "::error::Unexpected event for the trusted beta workflow."; exit 1 ;;
@@ -46,6 +49,13 @@ jobs:
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.10.0
+          package-manager-cache: false
+
+      - name: Verify product source matches the beta.3 source
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts-beta.3
+          node scripts/verify-beta-source-base.mjs "$SAYGM_PRODUCT_SOURCE_SHA" | tee artifacts-beta.3/source-verification.json
 
       - name: Install pnpm
         run: npm install --global pnpm@10.30.3
@@ -61,21 +71,6 @@ jobs:
           cargo --version
           test "$(node -p 'process.arch')" = arm64
           rustc -vV | grep -Fx 'host: aarch64-apple-darwin'
-
-      - name: Restore the existing Rust dependency cache
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          key: saygm-desktop-macos-arm64-default
-          save-if: false
-          cache-on-failure: true
-
-      - name: Cache Rust build outputs including workspace crates
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          # Start a new cache generation; the previous step restores existing dependency artifacts.
-          key: saygm-desktop-macos-arm64-workspace-crates-v1
-          cache-on-failure: true
-          cache-workspace-crates: true
 
       - name: Install locked desktop dependencies
         working-directory: ui
@@ -213,7 +208,7 @@ jobs:
           app_dir="ui/desktop/out/SayGM-darwin-arm64"
           app="$app_dir/SayGM.app"
           backend="$app/Contents/Resources/bin/saygm-agent"
-          report="artifacts-beta.2/qa/qa-native-macos-arm64.json"
+          report="artifacts-beta.3/qa/qa-native-macos-arm64.json"
           test -d "$app"
           test -x "$backend"
           test "$(plutil -extract CFBundleShortVersionString raw -o - "$app/Contents/Info.plist")" = "$SAYGM_BETA_VERSION"
@@ -250,7 +245,7 @@ jobs:
           SAYGM_BETA_VERSION: ${{ env.SAYGM_BETA_VERSION }}
         run: |
           set -euo pipefail
-          node - artifacts-beta.2/qa/qa-native-macos-arm64.json <<'NODE'
+          node - artifacts-beta.3/qa/qa-native-macos-arm64.json <<'NODE'
           const fs = require('node:fs');
           const assert = require('node:assert/strict');
           const [reportPath] = process.argv.slice(2);
@@ -275,9 +270,9 @@ jobs:
           set -euo pipefail
           app_dir="ui/desktop/out/SayGM-darwin-arm64"
           app="$app_dir/SayGM.app"
-          zip="artifacts-beta.2/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.zip"
-          dmg="artifacts-beta.2/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.dmg"
-          mkdir -p artifacts-beta.2
+          zip="artifacts-beta.3/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.zip"
+          dmg="artifacts-beta.3/SayGM-${SAYGM_BETA_VERSION}-macos-arm64.dmg"
+          mkdir -p artifacts-beta.3
           rm -f "$app_dir/SayGM.zip"
           ditto -c -k --sequesterRsrc --keepParent "$app" "$zip"
           hdiutil create -volname "SayGM Desktop" -srcfolder "$app" -ov -format UDZO "$dmg"
@@ -307,7 +302,7 @@ jobs:
           }
           console.log(`DMG notarization accepted; submission ${result.id ?? 'id unavailable'}.`);
           NODE
-          node - "$notary_json" artifacts-beta.2/notarization.json <<'NODE'
+          node - "$notary_json" artifacts-beta.3/notarization.json <<'NODE'
           const fs = require('node:fs');
           const result = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
           fs.writeFileSync(process.argv[3], `${JSON.stringify({ status: result.status, submission_id: result.id ?? null, artifact: 'DMG' }, null, 2)}\n`);
@@ -318,10 +313,10 @@ jobs:
           xcrun stapler validate -v "$dmg"
           spctl --assess --type execute --verbose=4 "$app"
           spctl --assess --type open --context context:primary-signature --verbose=4 "$dmg"
-          shasum -a 256 "$zip" "$dmg" > artifacts-beta.2/SHA256SUMS.txt
+          shasum -a 256 "$zip" "$dmg" > artifacts-beta.3/SHA256SUMS.txt
           codesign --verify --deep --strict --verbose=2 "$app"
-          node - artifacts-beta.2/provenance.json \
-            "$app" "$app/Contents/Resources/bin/saygm-agent" "$zip" "$dmg" artifacts-beta.2/qa/qa-native-macos-arm64.json artifacts-beta.2/notarization.json <<'NODE'
+          node - artifacts-beta.3/provenance.json \
+            "$app" "$app/Contents/Resources/bin/saygm-agent" "$zip" "$dmg" artifacts-beta.3/qa/qa-native-macos-arm64.json artifacts-beta.3/notarization.json <<'NODE'
           const fs = require('node:fs');
           const { createHash } = require('node:crypto');
           const { execFileSync } = require('node:child_process');
@@ -459,10 +454,10 @@ jobs:
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: saygm-macos-arm64-beta2-qa-${{ github.sha }}
+          name: saygm-macos-arm64-beta3-qa-${{ github.sha }}
           path: |
-            artifacts-beta.2/qa/qa-native-macos-arm64.json
-            artifacts-beta.2/qa/qa-native-macos-arm64.png
+            artifacts-beta.3/qa/qa-native-macos-arm64.json
+            artifacts-beta.3/qa/qa-native-macos-arm64.png
           if-no-files-found: ignore
           retention-days: 14
 
@@ -470,14 +465,14 @@ jobs:
         if: success()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: saygm-macos-arm64-0.1.0-beta.2-${{ github.sha }}
+          name: saygm-macos-arm64-0.1.0-beta.3-${{ github.sha }}
           path: |
-            artifacts-beta.2/SayGM-0.1.0-beta.2-macos-arm64.zip
-            artifacts-beta.2/SayGM-0.1.0-beta.2-macos-arm64.dmg
-            artifacts-beta.2/SHA256SUMS.txt
-            artifacts-beta.2/provenance.json
-            artifacts-beta.2/notarization.json
-            artifacts-beta.2/qa/qa-native-macos-arm64.json
-            artifacts-beta.2/qa/qa-native-macos-arm64.png
+            artifacts-beta.3/SayGM-0.1.0-beta.3-macos-arm64.zip
+            artifacts-beta.3/SayGM-0.1.0-beta.3-macos-arm64.dmg
+            artifacts-beta.3/SHA256SUMS.txt
+            artifacts-beta.3/provenance.json
+            artifacts-beta.3/notarization.json
+            artifacts-beta.3/qa/qa-native-macos-arm64.json
+            artifacts-beta.3/qa/qa-native-macos-arm64.png
           if-no-files-found: error
           retention-days: 14

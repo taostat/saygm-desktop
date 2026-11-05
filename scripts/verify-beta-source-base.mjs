@@ -10,6 +10,7 @@ git('cat-file', '-e', `${sourceRevision}^{commit}`);
 git('merge-base', '--is-ancestor', sourceRevision, automationRevision);
 
 const allowedBuildAutomationChanges = new Set([
+  '.github/workflows/build-macos-beta3.yml',
   '.github/workflows/build-ubuntu.yml',
   '.github/workflows/build-windows.yml',
   'scripts/build-ubuntu-release.sh',
