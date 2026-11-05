@@ -123,7 +123,6 @@ type ElectronAPI = {
   showNotification: (data: NotificationData) => void;
   showMessageBox: (options: MessageBoxOptions) => Promise<MessageBoxResponse>;
   showSaveDialog: (options: SaveDialogOptions) => Promise<SaveDialogResponse>;
-  openInChrome: (url: string) => void;
   reloadApp: () => void;
   checkForOllama: () => Promise<boolean>;
   selectFileOrDirectory: (defaultPath?: string) => Promise<string | null>;
@@ -226,7 +225,6 @@ const electronAPI: ElectronAPI = {
   showNotification: (data: NotificationData) => ipcRenderer.send('notify', data),
   showMessageBox: (options: MessageBoxOptions) => ipcRenderer.invoke('show-message-box', options),
   showSaveDialog: (options: SaveDialogOptions) => ipcRenderer.invoke('show-save-dialog', options),
-  openInChrome: (url: string) => ipcRenderer.send('open-in-chrome', url),
   reloadApp: () => ipcRenderer.send('reload-app'),
   checkForOllama: () => ipcRenderer.invoke('check-ollama'),
 
@@ -345,6 +343,7 @@ const electronAPI: ElectronAPI = {
     connectApiKey: (key: string) => gmAccountInvoke('gm-account:connect-api-key', key),
     finishProviderSetup: () => gmAccountInvoke('gm-account:finish-provider-setup'),
     logout: () => gmAccountInvoke('gm-account:logout'),
+    clearLegacyApiKey: () => gmAccountInvoke('gm-account:clear-legacy-api-key'),
     openTopup: () => gmAccountInvoke('gm-account:open-topup'),
   },
   getVersion: (): string => {

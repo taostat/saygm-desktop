@@ -5017,7 +5017,7 @@ dependencies = [
 
 [[package]]
 name = "goose"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-http",
@@ -5091,7 +5091,6 @@ dependencies = [
  "pastey",
  "pctx_code_mode",
  "pem 4.0.0",
- "process-wrap 9.1.0",
  "rand 0.10.2",
  "rayon",
  "rcgen",
@@ -5155,7 +5154,7 @@ dependencies = [
 
 [[package]]
 name = "goose-acp-macros"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "quote",
  "syn 3.0.5",
@@ -5163,7 +5162,7 @@ dependencies = [
 
 [[package]]
 name = "goose-agent"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5185,7 +5184,7 @@ dependencies = [
 
 [[package]]
 name = "goose-cli"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "agent-client-protocol",
  "anstream",
@@ -5204,7 +5203,6 @@ dependencies = [
  "cliclack",
  "comfy-table",
  "console",
- "dotenvy",
  "env-lock",
  "etcetera",
  "fs2",
@@ -5249,7 +5247,7 @@ dependencies = [
 
 [[package]]
 name = "goose-context-management"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -5265,7 +5263,7 @@ dependencies = [
 
 [[package]]
 name = "goose-download-manager"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "once_cell",
@@ -5277,7 +5275,7 @@ dependencies = [
 
 [[package]]
 name = "goose-local-inference"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5311,7 +5309,7 @@ dependencies = [
 
 [[package]]
 name = "goose-mcp"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5339,7 +5337,7 @@ dependencies = [
 
 [[package]]
 name = "goose-provider-types"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5371,7 +5369,7 @@ dependencies = [
 
 [[package]]
 name = "goose-providers"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -5407,7 +5405,7 @@ dependencies = [
 
 [[package]]
 name = "goose-roaming"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "anyhow",
  "base64 0.23.1",
@@ -5427,7 +5425,7 @@ dependencies = [
 
 [[package]]
 name = "goose-sdk"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -5447,7 +5445,7 @@ dependencies = [
 
 [[package]]
 name = "goose-sdk-types"
-version = "0.1.0-alpha.11"
+version = "0.1.0-alpha.12"
 dependencies = [
  "agent-client-protocol",
  "agent-client-protocol-schema",
@@ -5458,7 +5456,7 @@ dependencies = [
 
 [[package]]
 name = "goose-test"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "clap",
  "serde_json",
@@ -5466,12 +5464,14 @@ dependencies = [
 
 [[package]]
 name = "goose-test-support"
-version = "1.53.0"
+version = "1.55.0"
 dependencies = [
  "axum",
  "env-lock",
  "opentelemetry 0.32.0",
  "rmcp 3.4.1",
+ "schemars 1.2.2",
+ "serde",
  "serde_json",
  "tokio",
 ]
@@ -10182,9 +10182,9 @@ dependencies = [
 
 [[package]]
 name = "rustls"
-version = "0.23.45"
+version = "0.23.46"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0d41d731c7d2f962d1ccc364cec258de3c0e93b38c2fb3ba97ac74513048d634"
+checksum = "48e13bd8c0e9365c43cfa5c9e8f9ad49d3c8444926c9aac819e0e4dc503c8fdf"
 dependencies = [
  "aws-lc-rs",
  "log",

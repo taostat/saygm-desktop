@@ -1,14 +1,16 @@
 # SayGM Desktop release candidates
 
-## Unreleased — upstream maintenance
+## 0.1.0-beta.3 (candidate, unreleased)
 
-- Restore the original Goose ancestry while preserving existing private commits and releases.
-- Add an isolated, pinned upstream-update workflow and document the downstream integration boundaries.
-- Reconcile the reviewed Windows and Ubuntu sources into one maintenance branch.
-- Centralise desktop product configuration and separate SayGM styles from the shared stylesheet.
-- Centralise backend prompt identity and desktop storage policy while retaining existing behaviour.
+Changes since 0.1.0-beta.2:
 
-These are source changes. Existing RC5 downloads are unchanged; adopting a newer Goose revision and publishing new platform packages remain separate steps.
+- Offer SayGM's Claude models. The SayGM catalog lists them on the Messages API only, so they were previously hidden; they are now sent to the gateway's `/v1/messages` endpoint, and chat completions is still used for models that offer both.
+- Integrate Goose upstream `main` at `fe55e842fb8d92f16c45d04c83f07120cc4fa258` (Goose `1.55.0`) while preserving SayGM identity, account policy, pinned backend TLS, SayGM update behavior, and beta.2's centralized macOS model credentials and managed-key reuse.
+- Add an About page with a positive Goose attribution, a thank-you to the Goose team and community, and links to Goose and SayGM.com. On macOS the app menu's About SayGM entry opens this page, including before onboarding, and the page has a Back button.
+- Point in-app ticket raising to the public SayGM Desktop issue forms.
+- Update the Windows installer identity.
+
+This folds in the unpublished 0.1.0-rc.6 candidate. No beta.3 packages have been signed, notarized, or published.
 
 ## 0.1.0-rc.5 (internal Apple Silicon preview)
 
@@ -36,7 +38,7 @@ Focused protocol, display and type checks passed. This preview is being opened b
 - Replace manual balance refresh with automatic updates on entry and focus, with request coalescing and failure backoff.
 - Preserve the menu-bar logo's proportions and add transparent vertical margins.
 
-This preview is being opened at the user's request before final QA. Native startup, sign-in completion, and storage-prompt behavior require on-device verification; source and artifact checks alone do not establish those results. It remains ad hoc signed and unnotarized.
+This preview is being opened at the user's request before the final QA pass. Native startup, sign-in completion, and storage-prompt behavior require on-device verification; source and artifact checks alone do not establish those results. It remains ad hoc signed and unnotarized.
 
 ## 0.1.0-rc.2
 

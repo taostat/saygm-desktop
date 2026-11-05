@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "GooseはSayGMを支えるオープンソースのAIエージェントフレームワークです。この基盤を築いたGooseチームとコミュニティに感謝します。"
+  },
+  "about.eyebrow": {
+    "defaultMessage": "SayGMについて"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Gooseを知る"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "SayGM.comを見る"
+  },
+  "about.title": {
+    "defaultMessage": "Gooseを基盤に構築"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · バージョン {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "ACPアダプターが見つかりました"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "非推奨です。代わりに {replacement} を使用してください。"
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "ProviderCardエラー: メタデータが提供されていません"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "不明なプロバイダー"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "API形式"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "キャンセル"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "プロバイダーを選択"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "セッションの説明を更新しました"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "オペレーションベースのエージェントループを使用します。オフにすると従来のループを使用します。"
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "自動"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "しきい値 %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "トークン上限"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "古いツールのリクエストとレスポンスを要約してコンテキストを節約します。空欄の場合、カットオフは自動です。"

@@ -390,6 +390,15 @@ impl GooseAcpAgent {
         self.on_delete_provider_secret_if_sha256_matches(req).await
     }
 
+    #[custom_method(ProviderSecretDeleteLegacyIfSha256MatchesRequest)]
+    async fn dispatch_delete_legacy_provider_secret_if_sha256_matches(
+        &self,
+        req: ProviderSecretDeleteLegacyIfSha256MatchesRequest,
+    ) -> Result<ProviderSecretDeleteIfSha256MatchesResponse, agent_client_protocol::Error> {
+        self.on_delete_legacy_provider_secret_if_sha256_matches(req)
+            .await
+    }
+
     #[custom_method(CanonicalModelInfoRequest)]
     async fn dispatch_canonical_model_info(
         &self,

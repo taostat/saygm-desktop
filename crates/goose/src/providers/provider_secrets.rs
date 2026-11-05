@@ -301,6 +301,7 @@ fn build_huggingface_oauth_secret(
 fn build_secret_store_secrets(
     stored_secrets: &HashMap<String, Value>,
     providers: &[(ProviderMetadata, ProviderType)],
+    managed_broker: bool,
 ) -> Vec<ProviderSecret> {
     let mut secrets = Vec::new();
 
@@ -322,7 +323,9 @@ fn build_secret_store_secrets(
                 status: ProviderSecretStatus::Unknown,
                 configured: true,
                 has_secret: true,
-                can_delete: true,
+                can_delete: !(managed_broker
+                    && metadata.name == crate::providers::saygm::SAYGM_PROVIDER_NAME
+                    && config_key.name == crate::providers::saygm::SAYGM_API_KEY),
                 can_configure: false,
                 configure_provider: None,
             });
@@ -385,31 +388,50 @@ fn should_unconfigure_after_secret_delete(
 
 pub async fn list_provider_secrets() -> Result<Vec<ProviderSecret>, ConfigError> {
     let config = Config::global();
-    let stored_secrets = config.all_secrets()?;
+    let managed_broker = crate::config::managed_key_broker::is_requested();
+    let stored_secrets = if managed_broker {
+        let mut secrets = HashMap::new();
+        match config.get_secret::<String>(crate::providers::saygm::SAYGM_API_KEY) {
+            Ok(value) => {
+                secrets.insert(
+                    crate::providers::saygm::SAYGM_API_KEY.to_string(),
+                    Value::String(value),
+                );
+            }
+            Err(ConfigError::NotFound(_)) => {}
+            Err(error) => return Err(error),
+        }
+        secrets
+    } else {
+        config.all_secrets()?
+    };
     let providers = crate::providers::providers().await;
     let display_names: HashMap<String, String> = providers
         .iter()
         .map(|(metadata, _)| (metadata.name.clone(), metadata.display_name.clone()))
         .collect();
 
-    let mut secrets = build_secret_store_secrets(&stored_secrets, &providers);
+    let mut secrets = build_secret_store_secrets(&stored_secrets, &providers, managed_broker);
 
-    for definition in provider_cache_definitions_for_display() {
-        if let Some(secret) = build_provider_cache_secret(definition, &display_names) {
-            if !secrets.iter().any(|existing| existing.id == secret.id) {
-                secrets.push(secret);
+    if !managed_broker {
+        for definition in provider_cache_definitions_for_display() {
+            if let Some(secret) = build_provider_cache_secret(definition, &display_names) {
+                if !secrets.iter().any(|existing| existing.id == secret.id) {
+                    secrets.push(secret);
+                }
             }
         }
-    }
 
-    let huggingface_secret = build_huggingface_oauth_secret(huggingface_auth::load_oauth_token());
-    if let Some(existing) = secrets
-        .iter_mut()
-        .find(|existing| existing.id == huggingface_secret.id)
-    {
-        *existing = huggingface_secret;
-    } else {
-        secrets.push(huggingface_secret);
+        let huggingface_secret =
+            build_huggingface_oauth_secret(huggingface_auth::load_oauth_token());
+        if let Some(existing) = secrets
+            .iter_mut()
+            .find(|existing| existing.id == huggingface_secret.id)
+        {
+            *existing = huggingface_secret;
+        } else {
+            secrets.push(huggingface_secret);
+        }
     }
 
     secrets.sort_by(|a, b| {
@@ -510,7 +532,7 @@ mod tests {
             ),
         ]);
 
-        let secrets = build_secret_store_secrets(&stored_secrets, &providers);
+        let secrets = build_secret_store_secrets(&stored_secrets, &providers, false);
 
         assert_eq!(secrets.len(), 1);
         assert_eq!(secrets[0].id, "secret_store:openai:OPENAI_API_KEY");
@@ -518,6 +540,39 @@ mod tests {
         assert_eq!(secrets[0].name, "OPENAI_API_KEY");
         assert_eq!(secrets[0].storage, ProviderSecretStorage::SecretStore);
         assert_eq!(secrets[0].status, ProviderSecretStatus::Unknown);
+        assert!(secrets[0].can_delete);
+    }
+
+    #[test]
+    fn managed_account_key_is_not_advertised_as_deletable() {
+        let metadata = ProviderMetadata::new(
+            crate::providers::saygm::SAYGM_PROVIDER_NAME,
+            "SayGM",
+            "SayGM provider",
+            "gm-model",
+            vec![],
+            "https://example.com",
+            vec![ConfigKey::new(
+                crate::providers::saygm::SAYGM_API_KEY,
+                true,
+                true,
+                None,
+                true,
+            )],
+        );
+        let providers = vec![(metadata, ProviderType::Builtin)];
+        let stored_secrets = HashMap::from([(
+            crate::providers::saygm::SAYGM_API_KEY.to_string(),
+            Value::String("managed-value".to_string()),
+        )]);
+
+        let secrets = build_secret_store_secrets(&stored_secrets, &providers, true);
+
+        assert_eq!(secrets.len(), 1);
+        assert!(!secrets[0].can_delete);
+
+        let standard_goose_secrets = build_secret_store_secrets(&stored_secrets, &providers, false);
+        assert!(standard_goose_secrets[0].can_delete);
     }
 
     #[test]

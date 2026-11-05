@@ -35,6 +35,8 @@ async fn run() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    goose::config::initialize_managed_key_broker().map_err(anyhow::Error::msg)?;
+
     #[cfg(windows)]
     enable_windows_vt_processing();
 

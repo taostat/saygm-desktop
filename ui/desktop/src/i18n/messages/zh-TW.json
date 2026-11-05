@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose 是支援 SayGM 的開源 AI 代理框架。感謝 Goose 團隊與社群建立這個基礎。"
+  },
+  "about.eyebrow": {
+    "defaultMessage": "關於 SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "探索 Goose"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "前往 SayGM.com"
+  },
+  "about.title": {
+    "defaultMessage": "建基於 Goose"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · 版本 {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "已找到 ACP 轉接器"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "已棄用 — 請改用 {replacement}。"
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "ProviderCard 錯誤：未提供中繼資料"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "未知的提供者"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "API 格式"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "取消"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "選擇提供者"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "已成功更新工作階段描述"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "使用以操作為基礎的代理程式迴圈。關閉後將使用舊版迴圈。"
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "自動"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "閾值 %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "詞元上限"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "摘要較早的工具請求和回應以節省內容。留空時自動設定截斷值。"

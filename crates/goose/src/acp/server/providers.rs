@@ -541,7 +541,7 @@ impl GooseAcpAgent {
         req: ProviderSupportedModelsListRequest,
     ) -> Result<ProviderSupportedModelsListResponse, agent_client_protocol::Error> {
         let provider = self
-            .create_provider(&req.provider_id, Vec::new(), None, true)
+            .create_provider(&req.provider_id)
             .await
             .internal_err_ctx("Failed to initialize provider")?;
         let models = match provider.fetch_supported_models().await {
@@ -583,7 +583,7 @@ impl GooseAcpAgent {
 
         let result = tokio::time::timeout(
             ACP_READINESS_TIMEOUT,
-            self.create_provider(&req.provider_id, Vec::new(), None, true),
+            self.create_provider(&req.provider_id),
         )
         .await;
         let (ready, error) = match result {
@@ -902,11 +902,10 @@ impl GooseAcpAgent {
             let toolshim = refresh_job.toolshim;
             tokio::spawn(async move {
                 let mut refresh_guard = provider_inventory.refresh_guard(&identity);
-                let provider_result = AssertUnwindSafe(async {
-                    provider_factory(provider_id.clone(), Vec::new(), None, true).await
-                })
-                .catch_unwind()
-                .await;
+                let provider_result =
+                    AssertUnwindSafe(async { provider_factory(provider_id.clone()).await })
+                        .catch_unwind()
+                        .await;
 
                 let fetch_result: Result<Vec<String>> = match provider_result {
                     Ok(Ok(provider)) => {
@@ -997,7 +996,28 @@ impl GooseAcpAgent {
         let config = Config::global();
         let config_keys = &entry.metadata().config_keys;
         let secrets = if config_keys.iter().any(|key| key.secret) {
-            Some(config.all_secrets().internal_err()?)
+            if crate::config::managed_key_broker::is_requested()
+                && req.provider_id == crate::providers::saygm::SAYGM_PROVIDER_NAME
+            {
+                let mut secrets = HashMap::new();
+                match config.get_secret::<String>(crate::providers::saygm::SAYGM_API_KEY) {
+                    Ok(value) => {
+                        secrets.insert(
+                            crate::providers::saygm::SAYGM_API_KEY.to_string(),
+                            serde_json::Value::String(value),
+                        );
+                    }
+                    Err(ConfigError::NotFound(_)) => {}
+                    Err(error) => {
+                        return Err(
+                            agent_client_protocol::Error::internal_error().data(error.to_string())
+                        );
+                    }
+                }
+                Some(secrets)
+            } else {
+                Some(config.all_secrets().internal_err()?)
+            }
         } else {
             None
         };
@@ -1245,6 +1265,42 @@ impl GooseAcpAgent {
         let deleted = Config::global()
             .delete_secret_if_sha256_matches(&req.key, &req.expected_sha256)
             .internal_err_ctx("Failed to conditionally delete SayGM API key")?;
+        Ok(ProviderSecretDeleteIfSha256MatchesResponse { deleted })
+    }
+
+    pub(super) async fn on_delete_legacy_provider_secret_if_sha256_matches(
+        &self,
+        req: ProviderSecretDeleteLegacyIfSha256MatchesRequest,
+    ) -> Result<ProviderSecretDeleteIfSha256MatchesResponse, agent_client_protocol::Error> {
+        if !crate::config::base::is_saygm_desktop()
+            || !crate::config::managed_key_broker::is_requested()
+            || req.provider_id != crate::providers::saygm::SAYGM_PROVIDER_NAME
+            || req.key != crate::providers::saygm::SAYGM_API_KEY
+        {
+            return Err(agent_client_protocol::Error::invalid_params()
+                .data("Legacy cleanup is available only for the SayGM desktop API key"));
+        }
+        if req.expected_sha256.len() != 64
+            || !req
+                .expected_sha256
+                .bytes()
+                .all(|byte| byte.is_ascii_hexdigit())
+        {
+            return Err(agent_client_protocol::Error::invalid_params()
+                .data("Expected key digest must be a SHA-256 hex digest"));
+        }
+
+        let config = Config::global();
+        if config
+            .secret_sha256_matches_fresh(&req.key, &req.expected_sha256)
+            .internal_err_ctx("Failed to verify SayGM account key authority")?
+        {
+            return Err(agent_client_protocol::Error::invalid_params()
+                .data("Sign out or revoke the active SayGM key before removing its legacy copy"));
+        }
+        let deleted = config
+            .remove_legacy_saygm_api_key_if_sha256_matches(&req.expected_sha256)
+            .internal_err_ctx("Failed to remove legacy SayGM API key")?;
         Ok(ProviderSecretDeleteIfSha256MatchesResponse { deleted })
     }
 

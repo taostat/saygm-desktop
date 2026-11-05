@@ -9,8 +9,8 @@ build_parent="${RUNNER_TEMP:-${TMPDIR:-/tmp}}"
 build_out=""
 staged_goose="$repo_root/ui/desktop/src/bin/goose"
 source_goose="$repo_root/target/release/goose"
-temporary_stage="${staged_goose}.rc5-tmp"
-release_version="$(node -p "require('$repo_root/ui/desktop/package.json').version")"
+temporary_stage="${staged_goose}.release-tmp"
+release_version="${SAYGM_BETA_VERSION:-$(node -p "require('$repo_root/ui/desktop/package.json').version")}"
 
 case "$build_arch" in
   x64)
@@ -33,8 +33,8 @@ if [[ "$(uname -s)" != Linux || "$(uname -m)" != "$expected_host_arch" ]]; then
   echo "This release build must run on native Ubuntu $expected_host_arch." >&2
   exit 2
 fi
-if [[ "$release_version" != 0.1.0-rc.5 ]]; then
-  echo "Expected desktop version 0.1.0-rc.5, found $release_version." >&2
+if [[ ! "$release_version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "Desktop version must be a semantic version with an optional prerelease label, found $release_version." >&2
   exit 2
 fi
 if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
@@ -43,7 +43,7 @@ if [[ -e "$staged_goose" || -L "$staged_goose" || -e "$temporary_stage" ]]; then
 fi
 
 mkdir -p "$artifact_dir" "$build_parent"
-build_out="$(mktemp -d "$build_parent/saygm-ubuntu-rc5-forge.XXXXXX")"
+build_out="$(mktemp -d "$build_parent/saygm-ubuntu-${release_version}-forge.XXXXXX")"
 staged=false
 source_hash=""
 work_dir=""
@@ -72,10 +72,11 @@ source_hash="$(sha256sum "$source_goose" | cut -d ' ' -f 1)"
 install -m 0755 "$source_goose" "$temporary_stage"
 mv "$temporary_stage" "$staged_goose"
 staged=true
+node "$repo_root/ui/desktop/scripts/prepare-platform-binaries.js"
 
 pnpm --dir ui/desktop run build-goose-acp-client
 pnpm --dir ui/desktop run i18n:compile
-SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH="$build_arch" pnpm --dir ui/desktop exec electron-forge make \
+SAYGM_BETA_VERSION="$release_version" SAYGM_RELEASE_OUT_DIR="$build_out" ELECTRON_ARCH="$build_arch" pnpm --dir ui/desktop exec electron-forge make \
   --platform=linux \
   --arch="$build_arch" \
   --targets=@electron-forge/maker-deb,@electron-forge/maker-zip
@@ -91,7 +92,7 @@ fi
 final_deb="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.deb"
 final_zip="$artifact_dir/SayGM-${release_version}-linux-${build_arch}.zip"
 if [[ -e "$final_deb" || -e "$final_zip" ]]; then
-  echo "Refusing to overwrite existing Ubuntu RC5 artifacts in $artifact_dir." >&2
+  echo "Refusing to overwrite existing Ubuntu artifacts in $artifact_dir." >&2
   exit 2
 fi
 cp "$deb_source" "$final_deb"
@@ -110,13 +111,13 @@ sed -i -e 's|^Exec=.*|Exec=/usr/bin/saygm %U|' -e 's|^Icon=.*|Icon=saygm|' "$des
 grep -Fx 'Exec=/usr/bin/saygm %U' "$desktop_file"
 grep -Fx 'Icon=saygm' "$desktop_file"
 
-package_goose="$package_root/usr/lib/saygm/resources/bin/goose"
-if [[ ! -x "$package_goose" ]]; then
-  echo "Debian package layout changed: missing /usr/lib/saygm/resources/bin/goose." >&2
+package_backend="$package_root/usr/lib/saygm/resources/bin/saygm-agent"
+if [[ ! -x "$package_backend" ]]; then
+  echo "Debian package layout changed: missing /usr/lib/saygm/resources/bin/saygm-agent." >&2
   find "$package_root/usr" -maxdepth 6 -type f -print >&2
   exit 1
 fi
-if [[ "$(sha256sum "$package_goose" | cut -d ' ' -f 1)" != "$source_hash" ]]; then
+if [[ "$(sha256sum "$package_backend" | cut -d ' ' -f 1)" != "$source_hash" ]]; then
   echo "Debian backend differs from the Cargo release binary." >&2
   exit 1
 fi
@@ -140,7 +141,7 @@ while IFS= read -r library; do
   fi
   printf 'Goose runtime library %s is provided by %s\n' "$library" "$owner"
   runtime_packages+=("$owner")
-done < <(ldd "$package_goose" | awk '/=> \// {sub(/^.*=> /, ""); sub(/ .*/, ""); print} /^[[:space:]]*\// {print $1}')
+done < <(ldd "$package_backend" | awk '/=> \// {sub(/^.*=> /, ""); sub(/ .*/, ""); print} /^[[:space:]]*\// {print $1}')
 
 python3 - "$package_root/DEBIAN/control" "${runtime_packages[@]}" <<'PY'
 import pathlib
@@ -184,12 +185,20 @@ rebuilt_deb="$work_dir/rebuilt.deb"
 dpkg-deb --build --root-owner-group "$package_root" "$rebuilt_deb" >/dev/null
 mv "$rebuilt_deb" "$final_deb"
 
+# Free the expanded .deb tree and Forge's source archives before package QA.
+rm -rf "$work_dir" "$build_out"
+work_dir=""
+build_out=""
+
 node "$repo_root/scripts/verify-ubuntu-release.mjs" \
   --deb "$final_deb" \
   --zip "$final_zip" \
   --source-backend "$source_goose" \
   --arch "$build_arch" \
+  --expected-version "$release_version" \
   --report "$artifact_dir/package-verification.json"
+node "$repo_root/scripts/verify-beta-source-base.mjs" "${SAYGM_PRODUCT_SOURCE_SHA:?SAYGM_PRODUCT_SOURCE_SHA is required for beta artifacts}" \
+  > "$artifact_dir/source-verification.json"
 
 cat > "$artifact_dir/INSTALL-UBUNTU.txt" <<EOF
 SayGM Desktop ${release_version} for Ubuntu ${build_arch}
@@ -200,16 +209,17 @@ The portable ZIP contains the app and can be extracted and launched without inst
 Linux credentials require an unlocked Secret Service provider such as GNOME Keyring.
 SayGM refuses OAuth setup when secure storage is unavailable; basic_text storage is not accepted.
 
-This is a private RC5 build using production SayGM API and gateway endpoints.
+This is a private ${release_version} build using production SayGM API and gateway endpoints.
 No account login or inference was performed by the package build.
 EOF
 
 cat > "$artifact_dir/BUILD-INFO.txt" <<EOF
 Version: ${release_version}
 Platform: Ubuntu 22.04 ${build_arch}
+Product source revision: ${SAYGM_PRODUCT_SOURCE_SHA:-unknown}
+Build automation revision: $(git -C "$repo_root" rev-parse HEAD)
 Backend source: target/release/goose built by cargo build --locked --release -p goose-cli --bin goose
 Backend SHA-256: ${source_hash}
-Build commit: $(git -C "$repo_root" rev-parse HEAD)
 EOF
 
-echo "Ubuntu RC5 artifacts created in $artifact_dir"
+echo "Ubuntu ${release_version} artifacts created in $artifact_dir"

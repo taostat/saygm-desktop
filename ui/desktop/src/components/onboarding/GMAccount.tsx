@@ -153,6 +153,7 @@ export default function GMAccount({ mode = 'full', onConnected }: GmAccountCompo
           next.providerConfigured,
           next.secureStorageAvailable,
           next.remoteCleanupPending,
+          next.legacyKeyCleanupPending,
         ])
       : null;
     const contextChanged = statusContext.current !== nextContext;
@@ -520,6 +521,30 @@ export default function GMAccount({ mode = 'full', onConnected }: GmAccountCompo
     }
   };
 
+  const clearLegacyApiKey = async () => {
+    setError(null);
+    setNotice(null);
+    setAction('logout');
+    try {
+      const result = await window.electron.gmAccount.clearLegacyApiKey();
+      updateStatus(await readStatus(true));
+      setNotice(
+        result.removed
+          ? 'The older local SayGM key was removed from Keychain.'
+          : 'No matching older local SayGM key remained in Keychain.'
+      );
+    } catch (cause) {
+      setError(errorText(cause));
+      try {
+        updateStatus(await readStatus(true));
+      } catch {
+        // Keep the cleanup error visible.
+      }
+    } finally {
+      setAction('idle');
+    }
+  };
+
   const openTopup = async () => {
     setError(null);
     const context = statusRef.current?.connected ? statusContext.current : null;
@@ -585,6 +610,20 @@ export default function GMAccount({ mode = 'full', onConnected }: GmAccountCompo
         <div role="alert" className={ALERT_CLASS}>
           SayGM could not access secure storage. Sign-in and key setup are paused. Restart SayGM to
           check secure storage again.
+        </div>
+      )}
+
+      {status?.legacyKeyCleanupPending && (
+        <div role="status" className={NOTE_CLASS}>
+          <p>An older local API key may remain in macOS Keychain. Remove only the matching key?</p>
+          <button
+            type="button"
+            onClick={() => void clearLegacyApiKey()}
+            disabled={busy}
+            className="gm-btn gm-btn--secondary gm-btn--sm mt-3"
+          >
+            {action === 'logout' ? 'Removing legacy key…' : 'Remove legacy key'}
+          </button>
         </div>
       )}
 

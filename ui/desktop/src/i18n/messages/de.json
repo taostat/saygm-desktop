@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose ist das Open-Source-Framework für KI-Agenten hinter SayGM. Vielen Dank an das Goose-Team und die Community für dieses Fundament."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "Über SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Goose entdecken"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "SayGM.com besuchen"
+  },
+  "about.title": {
+    "defaultMessage": "Auf Goose aufgebaut"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Version {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "ACP-Adapter gefunden"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Veraltet — verwenden Sie stattdessen {replacement}."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "ProviderCard-Fehler: Keine Metadaten bereitgestellt"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Unbekannter Anbieter"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "API-Format"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "Abbrechen"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Anbieter auswählen"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Sitzungsbeschreibung erfolgreich aktualisiert"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "Verwende die operationsbasierte Agentenschleife. Deaktiviere sie, um die Legacy-Schleife zu verwenden."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Automatisch"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Schwellenwert %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Token-Limit"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Fasst ältere Werkzeuganfragen und -antworten zusammen, um Kontext zu sparen. Ohne Eingabe wird der Grenzwert automatisch festgelegt."

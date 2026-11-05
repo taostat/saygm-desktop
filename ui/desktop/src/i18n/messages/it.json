@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose è il framework open source per agenti AI alla base di SayGM. Grazie al team e alla community di Goose per aver creato queste fondamenta."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "Informazioni su SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Scopri Goose"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "Visita SayGM.com"
+  },
+  "about.title": {
+    "defaultMessage": "Basato su Goose"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Versione {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "Adattatore ACP trovato"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Deprecato — usa invece {replacement}."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "Errore ProviderCard: nessun metadato fornito"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Provider sconosciuto"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "Formato API"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "Annulla"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Scegli provider"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Descrizione della sessione aggiornata correttamente"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "Usa il ciclo agente basato sulle operazioni. Disattivalo per usare il ciclo legacy."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Automatico"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Soglia %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Limite di token"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Riassume le richieste e le risposte meno recenti degli strumenti per risparmiare contesto. La soglia è automatica se il campo è vuoto."

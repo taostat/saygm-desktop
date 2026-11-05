@@ -1,6 +1,6 @@
 ---
-name: Bug report
-about: Create a report to help us improve
+name: SayGM Desktop bug report
+about: Report a problem with SayGM Desktop
 title: ''
 type: bug
 assignees: ''
@@ -8,11 +8,7 @@ assignees: ''
 
 **Describe the bug**
 
-💡 Before filing, please check common issues:  
-https://goose-docs.ai/docs/troubleshooting  
-
-📦 To help us debug faster, attach your **diagnostics zip** if possible.  
-👉 How to capture it: https://goose-docs.ai/docs/troubleshooting/diagnostics-and-reporting/
+📦 If useful, attach a SayGM Desktop diagnostics report. Review it first and remove any session content or other information you do not want to share publicly.
 
 A clear and concise description of what the bug is.
 
@@ -39,9 +35,9 @@ If applicable, add screenshots to help explain your problem.
 
 **Please provide the following information**
 - **OS & Arch:** [e.g. Ubuntu 22.04 x86]
-- **Interface:** [UI / CLI]
-- **Version:** [e.g. v1.0.2]
-- **Extensions enabled:** [e.g. Computer Controller, Figma]
+- **Interface:** Desktop app
+- **Version:** [e.g. 0.1.0-rc.4]
+- **Extensions enabled:** [if relevant]
 - **Provider & Model:** [e.g. Google – gemini-1.5-pro]
 
 ---
@@ -49,4 +45,4 @@ If applicable, add screenshots to help explain your problem.
 **Additional context**
 Add any other context about the problem here.
 
-Do not begin implementation until the issue reaches **Ready** on the [Goose Issues board](https://github.com/orgs/aaif-goose/projects/1).
+For changes intended for an upstream Goose pull request, the corresponding issue must be on the [Goose Issues board](https://github.com/orgs/aaif-goose/projects/1) with Status **Ready** before implementation.

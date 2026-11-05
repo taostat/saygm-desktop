@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose ialah rangka kerja ejen AI sumber terbuka di sebalik SayGM. Terima kasih kepada pasukan dan komuniti Goose kerana membina asas ini."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "Perihal SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Terokai Goose"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "Lawati SayGM.com"
+  },
+  "about.title": {
+    "defaultMessage": "Dibina berasaskan Goose"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Versi {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "Penyesuai ACP ditemui"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Tidak digunakan lagi — gunakan {replacement} sebagai gantinya."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "Ralat ProviderCard: Tiada metadata disediakan"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Penyedia Tidak Diketahui"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "Format API"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "Batal"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Pilih Penyedia"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Penerangan sesi berjaya dikemas kini"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "Gunakan gelung ejen berasaskan operasi. Matikan untuk menggunakan gelung legasi."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Automatik"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Ambang %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Had token"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Merumuskan permintaan dan respons alat lama untuk menjimatkan konteks. Had ditetapkan secara automatik jika dibiarkan kosong."

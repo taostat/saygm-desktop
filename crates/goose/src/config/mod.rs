@@ -2,6 +2,7 @@ pub mod base;
 pub mod declarative_providers;
 mod experiments;
 pub mod extensions;
+pub(crate) mod managed_key_broker;
 mod migrations;
 pub mod paths;
 pub mod permission;
@@ -21,6 +22,7 @@ pub use extensions::{
     resolve_extensions_for_new_session, set_extension, set_extension_enabled, ExtensionEntry,
 };
 pub use goose_providers::goose_mode::GooseMode;
+pub use managed_key_broker::initialize_managed_key_broker;
 pub use permission::PermissionManager;
 pub use signup_openrouter::configure_openrouter;
 pub use signup_tetrate::configure_tetrate;

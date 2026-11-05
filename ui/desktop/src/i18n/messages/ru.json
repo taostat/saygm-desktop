@@ -1,4 +1,22 @@
 {
+  "about.description": {
+    "defaultMessage": "Goose — фреймворк с открытым исходным кодом для ИИ-агентов, лежащий в основе SayGM. Спасибо команде и сообществу Goose за эту основу."
+  },
+  "about.eyebrow": {
+    "defaultMessage": "О SayGM"
+  },
+  "about.gooseLink": {
+    "defaultMessage": "Узнать больше о Goose"
+  },
+  "about.saygmLink": {
+    "defaultMessage": "Посетить SayGM.com"
+  },
+  "about.title": {
+    "defaultMessage": "Создано на базе Goose"
+  },
+  "about.version": {
+    "defaultMessage": "SayGM Desktop · Версия {version}"
+  },
   "acpReadinessPanel.adapterFound": {
     "defaultMessage": "Адаптер ACP найден"
   },
@@ -2798,9 +2816,6 @@
   "providerCard.deprecatedReplacement": {
     "defaultMessage": "Устарел — используйте вместо него {replacement}."
   },
-  "providerCard.noMetadata": {
-    "defaultMessage": "Ошибка ProviderCard: метаданные не предоставлены"
-  },
   "providerCard.unknownProvider": {
     "defaultMessage": "Неизвестный провайдер"
   },
@@ -2809,9 +2824,6 @@
   },
   "providerCatalogPicker.apiFormat": {
     "defaultMessage": "Формат API"
-  },
-  "providerCatalogPicker.cancel": {
-    "defaultMessage": "Отмена"
   },
   "providerCatalogPicker.chooseProvider": {
     "defaultMessage": "Выберите провайдера"
@@ -4049,9 +4061,6 @@
   "sessions.toast.updated": {
     "defaultMessage": "Описание сеанса успешно обновлено"
   },
-  "settings.agentLoop.description": {
-    "defaultMessage": "Использовать цикл агента на основе операций. Отключите, чтобы использовать прежний цикл."
-  },
   "settings.agentLoop.operations.auto.placeholder": {
     "defaultMessage": "Автоматически"
   },
@@ -4105,6 +4114,9 @@
   },
   "settings.agentLoop.operations.threshold.label": {
     "defaultMessage": "Порог %"
+  },
+  "settings.agentLoop.operations.tokenLimit.label": {
+    "defaultMessage": "Лимит токенов"
   },
   "settings.agentLoop.operations.toolPairCompaction.description": {
     "defaultMessage": "Сводит старые запросы и ответы инструментов для экономии контекста. Если поле пусто, порог выбирается автоматически."

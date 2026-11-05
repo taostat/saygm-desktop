@@ -190,10 +190,7 @@ const NavRow: React.FC<NavRowProps> = ({ item, active, onClick, trailing, compac
       className={cn('gm-rail-row no-drag', compact && 'gm-rail-row--compact')}
     >
       <Icon className="size-4 flex-shrink-0 text-text-secondary" aria-hidden="true" />
-      <span className="flex-1 truncate">{getNavItemLabel(item, intl)}</span>
-      {item.getTag && (
-        <span className="font-mono text-[11px] text-text-tertiary">{item.getTag()}</span>
-      )}
+      <span className="text-left flex-1 truncate">{getNavItemLabel(item, intl)}</span>
       {trailing}
     </button>
   );
@@ -332,15 +329,14 @@ const SessionRow: React.FC<SessionRowProps> = ({
 };
 
 export const Navigation: React.FC<{
-  className?: string;
   activeLiveVoiceSessionId: string | null;
-}> = ({ className, activeLiveVoiceSessionId }) => {
+}> = ({ activeLiveVoiceSessionId }) => {
   const intl = useIntl();
   const { isNavExpanded } = useNavigationContext();
   const location = useLocation();
   const { extensionsList } = useConfig();
 
-  const appsExtensionEnabled = !!extensionsList?.find((ext) => ext.name === 'apps')?.enabled;
+  const appsExtensionEnabled = !!extensionsList.find((ext) => ext.name === 'apps')?.enabled;
 
   const visibleItems = useMemo<NavItem[]>(() => {
     return NAV_ITEMS.filter((item) => {
@@ -429,10 +425,7 @@ export const Navigation: React.FC<{
     <div
       ref={navFocusRef}
       tabIndex={-1}
-      className={cn(
-        'gm-fade-up-fast gm-rail-scroll-region relative flex h-full flex-col outline-none',
-        className
-      )}
+      className="gm-fade-up-fast gm-rail-scroll-region relative flex h-full flex-col outline-none bg-background-primary"
     >
       <div aria-hidden="true" className="gm-burst -left-10 -top-[60px] size-[360px]" />
       <div className="gm-rail-scroll-content relative flex min-h-0 flex-1 flex-col gap-4 px-3 pb-3 pt-12">

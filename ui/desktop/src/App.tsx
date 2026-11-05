@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, type RefObject } from 'react';
 import { IpcRendererEvent } from 'electron';
 import { HashRouter, Routes, Route, useNavigate, useLocation, useSearchParams } from 'react-router';
 import { ErrorUI } from './components/ErrorBoundary';
+import AboutView from './components/AboutView';
 import { ExtensionInstallModal } from './components/ExtensionInstallModal';
 import RecipeParamsModalContainer from './components/RecipeParamsModalContainer';
 import RecipeConsentModalContainer from './components/RecipeConsentModalContainer';
@@ -227,8 +228,7 @@ const SessionsRoute = () => {
 };
 
 const SchedulesRoute = () => {
-  const navigate = useNavigate();
-  return <SchedulesView onClose={() => navigate('/')} />;
+  return <SchedulesView />;
 };
 
 const RecipesRoute = () => {
@@ -633,6 +633,7 @@ export function AppInner() {
             <Route path="launcher" element={<LauncherView />} />
             <Route path="configure-providers" element={<ConfigureProvidersRoute />} />
             <Route path="standalone-app" element={<StandaloneAppView />} />
+            <Route path="about" element={<AboutView />} />
             <Route
               path="/"
               element={

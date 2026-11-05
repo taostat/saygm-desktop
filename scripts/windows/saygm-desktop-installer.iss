@@ -3,6 +3,9 @@
 #ifndef AppVersion
   #error AppVersion must be supplied by the build workflow.
 #endif
+#ifndef AppFileVersion
+  #error AppFileVersion must be supplied by the build workflow.
+#endif
 #ifndef SourceDir
   #error SourceDir must be supplied by the build workflow.
 #endif
@@ -15,6 +18,10 @@ AppId={{82B0119A-360B-4B7E-B073-A57D829A0871}
 AppName={#AppName} Desktop
 AppVersion={#AppVersion}
 AppVerName={#AppName} Desktop {#AppVersion}
+VersionInfoVersion={#AppFileVersion}
+VersionInfoTextVersion={#AppVersion}
+VersionInfoProductVersion={#AppFileVersion}
+VersionInfoProductTextVersion={#AppVersion}
 AppPublisher=SayGM
 AppPublisherURL=https://saygm.com/
 DefaultDirName={localappdata}\Programs\SayGM

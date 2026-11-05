@@ -6,6 +6,10 @@ import path from 'node:path';
 import { requestPinnedLocalStatus, type PinnedStatusResult } from './acp/pinnedLocalStatus';
 import { SAYGM_PRODUCT } from './product/saygmProduct';
 import {
+  attachManagedModelKeyBroker,
+  type ManagedModelKeyBrokerAuthority,
+} from './services/managedModelKeyBroker';
+import {
   appendTail as appendStartupTail,
   createGooseServeStartupDiagnostics,
   type GooseServeStartupDiagnostics,
@@ -38,11 +42,12 @@ export interface StartGooseServeOptions extends FindGooseBinaryOptions {
   serverSecret: string;
   tls?: boolean;
   env?: Record<string, string | undefined>;
-  /** PATH from the user's login shell, appended so goosed can find CLI providers. */
   loginShellPath?: string | null;
   logger?: Logger;
   diagnosticsDir?: string;
   readinessProbe?: ReadinessProbe;
+  managedModelKeyBroker?: ManagedModelKeyBrokerAuthority;
+  managedModelKeyBrokerRequired?: boolean;
 }
 
 export interface GooseServeResult {
@@ -82,7 +87,12 @@ export const findGooseBinaryPath = (options: FindGooseBinaryOptions = {}): strin
     throw new Error(`Invalid GOOSE_BINARY path: ${pathFromEnv} (pwd is ${process.cwd()})`);
   }
 
-  const binaryName = process.platform === 'win32' ? 'goose.exe' : 'goose';
+  const developmentBinaryName = process.platform === 'win32' ? 'goose.exe' : 'goose';
+  const binaryName = isPackaged
+    ? process.platform === 'win32'
+      ? 'saygm-agent.exe'
+      : 'saygm-agent'
+    : developmentBinaryName;
   const possiblePaths: string[] = [];
 
   if (isPackaged && resourcesPath) {
@@ -90,9 +100,9 @@ export const findGooseBinaryPath = (options: FindGooseBinaryOptions = {}): strin
     possiblePaths.push(path.join(resourcesPath, binaryName));
   } else {
     possiblePaths.push(
-      path.join(process.cwd(), 'src', 'bin', binaryName),
-      path.join(process.cwd(), '..', '..', 'target', 'release', binaryName),
-      path.join(process.cwd(), '..', '..', 'target', 'debug', binaryName)
+      path.join(process.cwd(), 'src', 'bin', developmentBinaryName),
+      path.join(process.cwd(), '..', '..', 'target', 'release', developmentBinaryName),
+      path.join(process.cwd(), '..', '..', 'target', 'debug', developmentBinaryName)
     );
   }
 
@@ -102,8 +112,9 @@ export const findGooseBinaryPath = (options: FindGooseBinaryOptions = {}): strin
     }
   }
 
+  const binaryLabel = isPackaged ? 'SayGM backend' : 'Goose';
   throw new Error(
-    `Goose binary not found in any of the possible paths: ${possiblePaths.join(', ')}`
+    `${binaryLabel} binary not found in any of the possible paths: ${possiblePaths.join(', ')}`
   );
 };
 
@@ -359,7 +370,9 @@ const buildGooseServeEnv = (
   const env: Record<string, string | undefined> = {
     ...process.env,
     HOME: homeDir,
-    [pathKey]: [path.dirname(binaryPath), currentPath, loginShellPath]
+    // The bundled goose and node/npx/uvx launchers are only a fallback; whatever
+    // the user has installed wins.
+    [pathKey]: [loginShellPath, currentPath, path.dirname(binaryPath)]
       .filter(Boolean)
       .join(path.delimiter),
   };
@@ -382,6 +395,7 @@ const buildGooseServeEnv = (
   // Apply these values after overlays so neither app config nor inherited
   // environment variables can opt into another provider mode or telemetry.
   env.SAYGM_DESKTOP = '1';
+  delete env.SAYGM_MANAGED_KEY_BROKER;
   env.GOOSE_TELEMETRY_OFF = '1';
   const appPathRoot = process.env.GOOSE_PATH_ROOT;
   env.GOOSE_PATH_ROOT =
@@ -416,6 +430,8 @@ export const startGooseServe = async ({
   logger = defaultLogger,
   diagnosticsDir,
   readinessProbe: injectedReadinessProbe,
+  managedModelKeyBroker,
+  managedModelKeyBrokerRequired = false,
 }: StartGooseServeOptions): Promise<GooseServeResult> => {
   const workingDir = dir || process.cwd();
   const startupTrace = createGooseServeStartupDiagnostics(diagnosticsDir, workingDir);
@@ -423,6 +439,15 @@ export const startGooseServe = async ({
   const secretKey = serverSecret.trim();
   if (!secretKey) {
     const message = 'GOOSE_SERVER__SECRET_KEY is required for goose serve';
+    startupTrace?.record('configuration_error', { message });
+    throw new Error(withStartupDiagnosticsPath(message, startupDiagnosticsPath));
+  }
+
+  const brokerRequired =
+    managedModelKeyBrokerRequired ||
+    (process.platform === 'darwin' && additionalEnv.SAYGM_DESKTOP === '1');
+  if (brokerRequired && (process.platform !== 'darwin' || managedModelKeyBroker === undefined)) {
+    const message = 'The private SayGM model-key channel is required to start this backend.';
     startupTrace?.record('configuration_error', { message });
     throw new Error(withStartupDiagnosticsPath(message, startupDiagnosticsPath));
   }
@@ -473,15 +498,33 @@ export const startGooseServe = async ({
     });
   }
 
+  const brokerEnabled = process.platform === 'darwin' && managedModelKeyBroker !== undefined;
+  const childEnv = buildGooseServeEnv(secretKey, goosePath, additionalEnv, loginShellPath);
+  delete childEnv.SAYGM_MANAGED_KEY_BROKER;
+  if (brokerEnabled) childEnv.SAYGM_MANAGED_KEY_BROKER = 'fd3-v1';
   const spawnOptions = {
-    env: buildGooseServeEnv(secretKey, goosePath, additionalEnv, loginShellPath),
+    env: childEnv,
     cwd: workingDir,
     windowsHide: true,
     shell: false as const,
-    stdio: ['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe'],
+    stdio: brokerEnabled
+      ? (['ignore', 'pipe', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe', 'pipe'])
+      : (['ignore', 'pipe', 'pipe'] as ['ignore', 'pipe', 'pipe']),
   };
 
   const gooseProcess = spawn(goosePath, args, spawnOptions);
+  let detachManagedModelKeyBroker: (() => void) | null = null;
+  if (brokerEnabled) {
+    const stream = gooseProcess.stdio[3];
+    if (!stream || typeof stream === 'number') {
+      gooseProcess.kill('SIGKILL');
+      throw new Error('The private SayGM model-key channel could not be created.');
+    }
+    detachManagedModelKeyBroker = attachManagedModelKeyBroker(
+      stream as import('node:stream').Duplex,
+      managedModelKeyBroker
+    );
+  }
   if (startupTrace) {
     startupTrace.diagnostics.pid = gooseProcess.pid ?? null;
     startupTrace.record('spawn_success', { pid: gooseProcess.pid ?? null });
@@ -581,6 +624,8 @@ export const startGooseServe = async ({
   });
 
   const cleanup = async (): Promise<void> => {
+    detachManagedModelKeyBroker?.();
+    detachManagedModelKeyBroker = null;
     return new Promise<void>((resolve) => {
       if (exited || gooseProcess.killed) {
         resolve();

@@ -1042,6 +1042,19 @@ pub struct ProviderSecretDeleteIfSha256MatchesResponse {
     pub deleted: bool,
 }
 
+/// Remove a legacy SayGM API key after the account authority has been revoked.
+#[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema, JsonRpcRequest)]
+#[request(
+    method = "_goose/unstable/providers/secrets/delete-legacy-if-sha256-matches",
+    response = ProviderSecretDeleteIfSha256MatchesResponse
+)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderSecretDeleteLegacyIfSha256MatchesRequest {
+    pub provider_id: String,
+    pub key: String,
+    pub expected_sha256: String,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "camelCase")]
 pub struct CanonicalModelInfoDto {

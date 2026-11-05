@@ -6,7 +6,7 @@
 
 SayGM Desktop brings the Goose desktop agent to your SayGM account. Sign in, choose supported SayGM models, check your balance, and manage local tool approvals and SayGM guardrail controls.
 
-It is a private, product-specific distribution of [Goose](https://github.com/aaif-goose/goose). Goose's Apache License 2.0 and upstream notices are retained in this repository. See [source provenance](SAYGM_BUILD_PROVENANCE.md) and the [upstream README](UPSTREAM_README.md).
+This public repository maintains a product-specific distribution of [Goose](https://github.com/aaif-goose/goose). Goose's Apache License 2.0 and upstream notices are retained in this repository. See [source provenance](SAYGM_BUILD_PROVENANCE.md) and the [upstream README](UPSTREAM_README.md).
 
 ## Downloads
 
@@ -35,4 +35,4 @@ pnpm test:run
 
 The backend lives in `crates/`; the desktop lives in `ui/desktop/`. Production account API: `https://account.saygm.com/v1`. Inference API: `https://api.saygm.com/v1`.
 
-For Goose updates and downstream architecture, see [Maintaining Goose](maintenance/UPSTREAM.md). This repository retains Goose's license and notices; its private release workflows publish SayGM builds only and do not publish to the upstream Goose repository.
+For Goose updates and downstream architecture, see [Maintaining Goose](maintenance/UPSTREAM.md). This repository retains Goose's license and notices. Its release workflows publish SayGM builds only and do not publish to the upstream Goose repository.
